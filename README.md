@@ -125,5 +125,3 @@ Once configured, the following tools are available:
    download_from_annas_archive("c17f7a3108c48634ff635f34497c977b")
    ```
 
----
-*Created and maintained by Antigravity AI.*
