@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "knowledge-server": {
+      "command": "./venv/bin/python",
+      "args": [
+        "./server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "."
+      },
+      "disabled": false,
+      "alwaysAllow": [],
+      "disabledTools": []
+    }
+  }
+}
