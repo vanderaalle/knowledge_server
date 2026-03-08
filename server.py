@@ -704,6 +704,65 @@ def index_library(path: str, delete_all: bool = False) -> str:
 
 
 @mcp.tool()
+def index_single_pdf(file_path: str) -> str:
+    """Indicizza un singolo PDF (veloce, per file specifici)."""
+    from pathlib import Path
+    
+    try:
+        pdf_path = Path(file_path)
+        if not pdf_path.exists():
+            return f"❌ File non trovato: {file_path}"
+        
+        db = get_db()
+        
+        # Calcola hash
+        file_hash = _calculate_file_hash(pdf_path)
+        if db.is_file_indexed(file_hash):
+            return "⏭️ File già indicizzato"
+        
+        # Processa PDF
+        result = pdf_processor.process_pdf(str(pdf_path))
+        if result['error']:
+            return f"❌ Errore nel processamento: {result['error']}"
+        
+        if not result['chunks']:
+            return "❌ Nessun testo estratto dal PDF"
+        
+        # Genera embeddings e salva
+        points = []
+        total_chunks = len(result['chunks'])
+        
+        for i, chunk in enumerate(result['chunks']):
+            try:
+                response = ollama.embeddings(model=OLLAMA_MODEL, prompt=chunk.text)
+                embedding = response['embedding']
+                
+                point_id = hashlib.md5((result['file_path'] + str(chunk.chunk_index)).encode()).hexdigest()
+                
+                point = PointStruct(
+                    id=point_id,
+                    vector=embedding,
+                    payload={
+                        "text": chunk.text,
+                        "metadata": chunk.to_metadata()
+                    }
+                )
+                points.append(point)
+            except Exception as e:
+                pass  # Skip embedding errors for individual chunks
+        
+        if points:
+            db.upsert_points(points)
+            return f"✅ Indicizzato: {pdf_path.name}\n• Chunks: {len(points)}/{total_chunks}\n• Pagine: {result['chunks'][0].total_pages if result['chunks'] else 'N/A'}"
+        else:
+            return "❌ Nessun chunk valido da indicizzare"
+            
+    except Exception as e:
+        import traceback
+        return f"❌ Errore: {str(e)}\n{traceback.format_exc()}"
+
+
+@mcp.tool()
 def index_with_ocr(path: str) -> str:
     """Indicizza con OCR (Lento ma accurato per scansioni)."""
     if not path: return "❌ Path richiesto"
