@@ -836,7 +836,7 @@ def download_from_annas_archive(md5: str) -> str:
     try:
         print(f"[Annas] Starting download for MD5: {md5}", file=sys.stderr)
         url = f"{ANNAS_URL}/md5/{md5}"
-        output_dir = "/Users/barbagallo/Library/CloudStorage/GoogleDrive-carlo.barbagallo@conservatoriotorino.eu/Il mio Drive/DOCENTE/Libri+Dispense"
+        output_dir = "~/Library/CloudStorage/GoogleDrive-user@example.com/Il mio Drive/DOCENTE/Libri+Dispense"
         os.makedirs(output_dir, exist_ok=True)
         
         response = requests.get(url, headers={'User-Agent': USER_AGENT}, timeout=15)

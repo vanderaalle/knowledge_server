@@ -8,7 +8,7 @@ import os
 pytesseract.pytesseract.tesseract_cmd = '/opt/homebrew/bin/tesseract'
 POPPLER_PATH = '/opt/homebrew/bin'
 
-pdf_path = '/Users/barbagallo/Library/CloudStorage/GoogleDrive-carlo.barbagallo@conservatoriotorino.eu/Il mio Drive/DOCENTE/Libri+Dispense/PDF Backup Downloads - 241020/nono-1964-la-fabbrica-illuminata_compress.pdf'
+pdf_path = '~/Library/CloudStorage/GoogleDrive-user@example.com/Il mio Drive/DOCENTE/Libri+Dispense/PDF Backup Downloads - 241020/nono-1964-la-fabbrica-illuminata_compress.pdf'
 
 print(f"Testing OCR on: {pdf_path}")
 print(f"Tesseract Path: {pytesseract.pytesseract.tesseract_cmd}")

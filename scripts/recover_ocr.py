@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 # Add the server directory to sys.path
-sys.path.append('/Users/barbagallo/Desktop/python/knowledge_server')
+sys.path.append('.')
 
 try:
     from server import _calculate_file_hash, pdf_processor, COLLECTION_NAME, get_db
@@ -11,7 +11,7 @@ try:
     import sys
     
     print("🚀 Starting SEQUENTIAL OCR Recovery Pass...")
-    path_root = Path("/Users/barbagallo/Desktop/python/knowledge_server/alias_books")
+    path_root = Path("./alias_books")
     all_pdfs = list(path_root.rglob("*.pdf"))
     
     db = get_db()

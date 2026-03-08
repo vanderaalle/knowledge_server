@@ -7,8 +7,8 @@ import sys
 import hashlib
 from pathlib import Path
 
-os.chdir('/Users/barbagallo/Desktop/python/knowledge_server')
-sys.path.insert(0, '/Users/barbagallo/Desktop/python/knowledge_server')
+os.chdir('.')
+sys.path.insert(0, '.')
 
 from server import pdf_processor, get_db, OLLAMA_MODEL, _calculate_file_hash
 import ollama
@@ -34,7 +34,7 @@ def index_single_file(file_path):
         
         # Metadata
         document_title = pdf_processor.extract_document_title(str(file_path), text)
-        relative_path = os.path.relpath(file_path, "/Users/barbagallo/Desktop/python/knowledge_server/alias_books")
+        relative_path = os.path.relpath(file_path, "./alias_books")
         
         base_metadata = {
             "source": relative_path,

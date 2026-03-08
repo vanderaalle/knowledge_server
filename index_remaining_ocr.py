@@ -16,9 +16,10 @@ from qdrant_client.models import PointStruct
 from tqdm import tqdm
 
 # Impostazione percorsi
-BASE_DIR = '/Users/barbagallo/Desktop/python/knowledge_server'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(BASE_DIR)
 sys.path.insert(0, BASE_DIR)
+
 
 from server import pdf_processor, get_db, OLLAMA_MODEL, _calculate_file_hash, COLLECTION_NAME
 import ollama

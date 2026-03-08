@@ -3,8 +3,8 @@ import sys
 import os
 
 # Cambia nella directory del progetto
-os.chdir('/Users/barbagallo/Desktop/python/knowledge_server')
-sys.path.insert(0, '/Users/barbagallo/Desktop/python/knowledge_server')
+os.chdir('.')
+sys.path.insert(0, '.')
 
 from server import _index_directory
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Download IRCAM Fundamental Books from Anna's Archive"""
 import sys
-sys.path.insert(0, '/Users/barbagallo/Desktop/python/neworchestra2/knowledge_server')
+sys.path.insert(0, '~/Desktop/python/neworchestra2/knowledge_server')
 from search_annas import download_book
 
 # Books to download with their MD5 hashes
@@ -22,7 +22,7 @@ books_to_download = [
     ("ba82746584d4ec32e5a5e11eb38964e2", "Read_Music_Notation.pdf"),
 ]
 
-output_dir = "/Users/barbagallo/Desktop/python/neworchestra2/alias_books/IRCAM_Fundamentals"
+output_dir = "~/Desktop/python/neworchestra2/alias_books/IRCAM_Fundamentals"
 
 import os
 os.makedirs(output_dir, exist_ok=True)
