@@ -53,7 +53,7 @@ import shutil
 
 
 # Configuration
-ANNAS_URL = "https://annas-archive.li"
+ANNAS_URL = "https://annas-archive.gl"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'mxbai-embed-large')
 QDRANT_HOST = os.getenv('QDRANT_HOST', 'localhost')
@@ -817,10 +817,14 @@ def search_annas_archive(query: str, limit: int = 5, lang: str = '', ext: str = 
                 
                 if len(results) >= limit: break
         
-        if not results:
-            return f"❌ Nessun risultato per '{search_query}'. Prova con keyword diverse."
+        # If automated failed, return links
+        msg = f"❌ Download automatico fallito. Non sono stati trovati link diretti in formato PDF per '{full_name}'.\n\nEcco i link per il controllo manuale:\n"
+        for link in slow_links[:3]:
+            msg += f"🔗 Slow Server: {link}\n"
+        for link in libgen_links[:1]:
+            msg += f"🔗 Libgen: {link}\n"
             
-        return "\n\n".join(results) + "\n\n💡 Usa 'download_from_annas_archive(md5)' per scaricare."
+        return msg
 
     except Exception as e:
         return f"❌ Errore ricerca: {e}"
@@ -933,3 +937,4 @@ def download_from_annas_archive(md5: str) -> str:
 if __name__ == "__main__":
     print("[DEBUG] Starting Optimized Knowledge Server...", file=sys.stderr)
     mcp.run()
+# Reload trigger: Sun Mar  8 18:40:21 CET 2026
