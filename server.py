@@ -24,7 +24,7 @@ import concurrent.futures
 try:
     import fitz  # PyMuPDF
 except ImportError:
-    print("PyMuPDF (fitz) not found. Installing...", file=sys.stderr)
+    pass # print("PyMuPDF (fitz) not found. Installing...", file=sys.stderr)
     import subprocess
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pymupdf"])
     import fitz
@@ -55,6 +55,24 @@ import shutil
 # Configuration
 ANNAS_URL = "https://annas-archive.gl"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+ANNAS_URLS = ["https://annas-archive.gl", "https://annas-archive.se", "https://annas-archive.org", "https://annas-archive.li"]
+
+
+def _get_annas_response(endpoint: str, params: dict = None, stream: bool = False):
+    """Tenta di ottenere una risposta da Anna's Archive provando diversi mirror."""
+    last_error = None
+    for base_url in ANNAS_URLS:
+        url = f"{base_url}{endpoint}"
+        try:
+            # pass # print(f"[Annas] Provando mirror: {url}", file=sys.stderr)
+            resp = requests.get(url, params=params, headers={'User-Agent': USER_AGENT}, timeout=10, stream=stream)
+            resp.raise_for_status()
+            return resp, base_url
+        except Exception as e:
+            # pass # print(f"[Annas] Mirror fallito {url}: {e}", file=sys.stderr)
+            last_error = e
+            continue
+    raise last_error
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'mxbai-embed-large')
 QDRANT_HOST = os.getenv('QDRANT_HOST', 'localhost')
 QDRANT_PORT = int(os.getenv('QDRANT_PORT', '6333'))
@@ -186,12 +204,12 @@ class PDFProcessor:
                         page_texts.append(page_text)
                         full_text += page_text + "\n"
                 except Exception as e:
-                    print(f"OCR Error for {pdf_path}: {e}", file=sys.stderr)
+                    pass
             
             return full_text, page_texts, total_pages, used_ocr
             
         except Exception as e:
-            print(f"Error extracting text from {pdf_path}: {e}", file=sys.stderr)
+            pass # print(f"Error extracting text from {pdf_path}: {e}", file=sys.stderr)
             return "", [], 0, False
     
     def extract_document_title(self, pdf_path: str, first_page_text: str) -> str:
@@ -291,19 +309,19 @@ class VectorDBClient:
                         collection_name=COLLECTION_NAME,
                         vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
                     )
-                    print(f"Created collection '{COLLECTION_NAME}'", file=sys.stderr)
+                    pass # print(f"Created collection '{COLLECTION_NAME}'", file=sys.stderr)
                 except Exception as e:
-                     print(f"Error checking model embedding size: {e}. Is Ollama running?", file=sys.stderr)
+                     pass # print(f"Error checking model embedding size: {e}. Is Ollama running?", file=sys.stderr)
 
         except Exception as e:
-            print(f"Error creating/checking collection: {e}", file=sys.stderr)
+            pass # print(f"Error creating/checking collection: {e}", file=sys.stderr)
     
     def upsert_points(self, points: List[PointStruct]):
         """Inserisci o aggiorna punti"""
         try:
             self.client.upsert(collection_name=COLLECTION_NAME, points=points)
         except Exception as e:
-            print(f"Error upserting points: {e}", file=sys.stderr)
+            pass # print(f"Error upserting points: {e}", file=sys.stderr)
 
     def is_file_indexed(self, file_hash: str) -> bool:
         """Controlla se file già indicizzato"""
@@ -342,7 +360,7 @@ class VectorDBClient:
                 })
             return results
         except Exception as e:
-            print(f"Error searching: {e}", file=sys.stderr)
+            pass # print(f"Error searching: {e}", file=sys.stderr)
             return []
     
     def get_chunks_by_file(self, file_hash: str) -> List[Dict[str, Any]]:
@@ -381,7 +399,7 @@ class VectorDBClient:
             all_chunks.sort(key=lambda x: x["metadata"].get("chunk_index", 0))
             return all_chunks
         except Exception as e:
-            print(f"Error getting chunks: {e}", file=sys.stderr)
+            pass # print(f"Error getting chunks: {e}", file=sys.stderr)
             return []
 
     def get_head_chunks_by_file(self, file_hash: str, limit: int = 5) -> List[Dict[str, Any]]:
@@ -416,18 +434,18 @@ class VectorDBClient:
             return msg_chunks[:limit]
             
         except Exception as e:
-            print(f"Error getting head chunks: {e}", file=sys.stderr)
+            pass # print(f"Error getting head chunks: {e}", file=sys.stderr)
             return []
     
     def delete_collection(self):
         """Cancella collection intera"""
         try:
             self.client.delete_collection(collection_name=COLLECTION_NAME)
-            print(f"Deleted collection '{COLLECTION_NAME}'", file=sys.stderr)
+            pass # print(f"Deleted collection '{COLLECTION_NAME}'", file=sys.stderr)
             self._ensure_collection_exists()
             return True
         except Exception as e:
-            print(f"Error deleting collection: {e}", file=sys.stderr)
+            pass # print(f"Error deleting collection: {e}", file=sys.stderr)
             return False
 
 
@@ -452,7 +470,7 @@ def _calculate_file_hash(file_path: Path) -> str:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
     except Exception as e:
-        print(f"Error hashing {file_path}: {e}", file=sys.stderr)
+        pass # print(f"Error hashing {file_path}: {e}", file=sys.stderr)
         return ""
 
 
@@ -530,14 +548,14 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
         db.delete_collection()
     
     # 1. Scan directory or file
-    print(f"📁 Scanning: {directory_path}", file=sys.stderr)
+    pass # print(f"📁 Scanning: {directory_path}", file=sys.stderr)
     
     if not file_list:
         if path_obj.is_file():
             if path_obj.suffix.lower() == '.pdf':
                 all_pdfs = [path_obj]
             else:
-                 print("❌ File is not a PDF", file=sys.stderr)
+                 pass # print("❌ File is not a PDF", file=sys.stderr)
                  return 0, 0, 0, 0
         else:
             all_pdfs = list(path_obj.rglob("*.pdf"))
@@ -559,7 +577,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
     # Phase C: Main thread checks DB (hash already computed) -> if exists allow skip.
     # Phase D: Embedding + Upsert (Parallel).
     
-    print(f"📊 Process {total_pdfs} PDFs with {MAX_WORKERS} workers", file=sys.stderr)
+    pass # print(f"📊 Process {total_pdfs} PDFs with {MAX_WORKERS} workers", file=sys.stderr)
     
     stats = {
         "indexed": 0,
@@ -590,7 +608,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                 res = future.result()
                 
                 if res["status"] == "error":
-                    print(f"❌ Error processing {file_path.name}: {res.get('error_message')}", file=sys.stderr)
+                    pass # print(f"❌ Error processing {file_path.name}: {res.get('error_message')}", file=sys.stderr)
                     stats["errors"] += 1
                     continue
                 
@@ -604,7 +622,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                 
                 # Check duplication
                 if db.is_file_indexed(res["file_hash"]):
-                    #print(f"  ⏭️  Already indexed: {file_path.name}", file=sys.stderr)
+                    #pass # print(f"  ⏭️  Already indexed: {file_path.name}", file=sys.stderr)
                     stats["skipped"] += 1
                     continue
                 
@@ -625,7 +643,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                         try:
                             response = ollama.embeddings(model=OLLAMA_MODEL, prompt=text_to_embed)
                         except Exception as ollama_err:
-                            print(f"  ❌ Ollama Error for {file_path.name}: {ollama_err} (Prompt len: {len(text_to_embed)}, Model: {OLLAMA_MODEL})", file=sys.stderr)
+                            pass # print(f"  ❌ Ollama Error for {file_path.name}: {ollama_err} (Prompt len: {len(text_to_embed)}, Model: {OLLAMA_MODEL})", file=sys.stderr)
                             continue
                             
                         embedding = response["embedding"]
@@ -644,15 +662,15 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                         )
                         points.append(point)
                     except Exception as e:
-                        print(f"  ⚠️  Embedding error {file_path.name}: {e}", file=sys.stderr)
+                        pass # print(f"  ⚠️  Embedding error {file_path.name}: {e}", file=sys.stderr)
                 
                 if points:
                     db.upsert_points(points)
                     stats["indexed"] += 1
-                    #print(f"  ✅ Indexed {file_path.name} ({len(points)} chunks)", file=sys.stderr)
+                    #pass # print(f"  ✅ Indexed {file_path.name} ({len(points)} chunks)", file=sys.stderr)
             
             except Exception as e:
-                print(f"CRITICAL ERROR processing {file_path}: {e}", file=sys.stderr)
+                pass # print(f"CRITICAL ERROR processing {file_path}: {e}", file=sys.stderr)
                 stats["errors"] += 1
     
     return stats["indexed"], stats["skipped"], stats["errors"], stats["ocr_skipped"]
@@ -775,20 +793,34 @@ def search_annas_archive(query: str, limit: int = 5, lang: str = '', ext: str = 
                 # Clean reasoning tags if present
                 if "</think>" in keywords:
                     keywords = keywords.split("</think>")[-1].strip()
-                print(f"[Annas] Semantic expansion: '{query}' -> '{keywords}'", file=sys.stderr)
+                pass # print(f"[Annas] Semantic expansion: '{query}' -> '{keywords}'", file=sys.stderr)
                 search_query = keywords
         except Exception as e:
-            print(f"[Annas] Semantic error: {e}", file=sys.stderr)
+            pass # print(f"[Annas] Semantic error: {e}", file=sys.stderr)
 
-    # 2. Search
+    # 2. Search (VERSION V2.6 - FINAL INLINE)
     params = {'q': search_query}
     if lang: params['lang'] = lang
     if ext: params['ext'] = ext
     
-    url = f"{ANNAS_URL}/search"
-    
     try:
-        response = requests.get(url, params=params, headers={'User-Agent': USER_AGENT}, timeout=15)
+        # Inline mirror logic to avoid NameError
+        response = None
+        current_url = None
+        last_error = None
+        for base_url in ANNAS_URLS:
+            url = f"{base_url}/search"
+            try:
+                resp = requests.get(url, params=params, headers={'User-Agent': USER_AGENT}, timeout=10)
+                resp.raise_for_status()
+                response = resp
+                current_url = base_url
+                break
+            except Exception as e:
+                last_error = e
+                continue
+        
+        if not response: raise last_error
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -817,16 +849,15 @@ def search_annas_archive(query: str, limit: int = 5, lang: str = '', ext: str = 
                 
                 if len(results) >= limit: break
         
-        # If automated failed, return links
-        msg = f"❌ Download automatico fallito. Non sono stati trovati link diretti in formato PDF per '{full_name}'.\n\nEcco i link per il controllo manuale:\n"
-        for link in slow_links[:3]:
-            msg += f"🔗 Slow Server: {link}\n"
-        for link in libgen_links[:1]:
-            msg += f"🔗 Libgen: {link}\n"
+        if not results:
+            return f"❌ Nessun risultato trovato per '{search_query}'."
             
-        return msg
+        return f"V2.1 - {len(results)} risultati\n\n" + "\n\n".join(results) + "\n\n💡 Usa 'download_from_annas_archive(md5)' per scaricare."
 
     except Exception as e:
+        import traceback
+        error_msg = traceback.format_exc()
+        # print(f"❌ Errore ricerca: {e}\n{error_msg}", file=sys.stderr)
         return f"❌ Errore ricerca: {e}"
 
 
@@ -838,12 +869,26 @@ def download_from_annas_archive(md5: str) -> str:
     Tenta download automatico da IPFS/Libgen, altrimenti ritorna link manuali.
     """
     try:
-        print(f"[Annas] Starting download for MD5: {md5}", file=sys.stderr)
-        url = f"{ANNAS_URL}/md5/{md5}"
-        output_dir = "~/Library/CloudStorage/GoogleDrive-user@example.com/Il mio Drive/DOCENTE/Libri+Dispense"
+        # Inline mirror logic to avoid NameError
+        response = None
+        current_url = None
+        last_error = None
+        for base_url in ANNAS_URLS:
+            url = f"{base_url}/md5/{md5}"
+            try:
+                resp = requests.get(url, headers={'User-Agent': USER_AGENT}, timeout=10)
+                resp.raise_for_status()
+                response = resp
+                current_url = base_url
+                break
+            except Exception as e:
+                last_error = e
+                continue
+        
+        if not response: raise last_error
+        output_dir = "alias_books/"
         os.makedirs(output_dir, exist_ok=True)
         
-        response = requests.get(url, headers={'User-Agent': USER_AGENT}, timeout=15)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -889,14 +934,14 @@ def download_from_annas_archive(md5: str) -> str:
             elif 'libgen.li' in href:
                 libgen_links.append(href)
             elif '/slow_download/' in href:
-                slow_links.append(f"{ANNAS_URL}{href}")
+                slow_links.append(f"{current_url}{href}")
         
         # Try automated download (IPFS preferred)
         all_auto_links = ipfs_links + libgen_links
         
         for link in all_auto_links:
             try:
-                print(f"[Annas] Tenta download da: {link}", file=sys.stderr)
+                pass # print(f"[Annas] Tenta download da: {link}", file=sys.stderr)
                 with requests.get(link, stream=True, timeout=20) as r:
                     r.raise_for_status()
                     content_type = r.headers.get('Content-Type', '').lower()
@@ -905,18 +950,18 @@ def download_from_annas_archive(md5: str) -> str:
                         ext = 'pdf'
                         filepath = os.path.join(output_dir, f"{safe_name}.{ext}")
                         
-                        print(f"[Annas] Start writing to {filepath}", file=sys.stderr)
+                        pass # print(f"[Annas] Start writing to {filepath}", file=sys.stderr)
                         with open(filepath, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
-                        print(f"[Annas] Download finished: {filepath}", file=sys.stderr)
+                        pass # print(f"[Annas] Download finished: {filepath}", file=sys.stderr)
                         return f"✅ Download completato: {filepath}"
                     else:
-                        print(f"[Annas] Skipped non-PDF link ({content_type}) from {link}", file=sys.stderr)
+                        pass # print(f"[Annas] Skipped non-PDF link ({content_type}) from {link}", file=sys.stderr)
                         continue
                 
             except Exception as e:
-                print(f"[Annas] Error downloading {link}: {e}", file=sys.stderr)
+                pass # print(f"[Annas] Error downloading {link}: {e}", file=sys.stderr)
                 continue
                 
         # If automated failed, return links
@@ -935,6 +980,7 @@ def download_from_annas_archive(md5: str) -> str:
 
 
 if __name__ == "__main__":
-    print("[DEBUG] Starting Optimized Knowledge Server...", file=sys.stderr)
+    pass # print("[DEBUG] Starting Optimized Knowledge Server...", file=sys.stderr)
     mcp.run()
 # Reload trigger: Sun Mar  8 18:40:21 CET 2026
+# Force Reload Sun Mar  8 21:18:34 CET 2026
