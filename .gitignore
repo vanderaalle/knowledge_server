@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# System Files
+.DS_Store
+
+# Logs and PID files
+*.log
+*.pid
+
+# Data and Books (Large files/Symlinks)
+alias_books/
+alias_vector_db/
+
+# Reports and temporary files
+missing_*.txt
+pdfs_to_index.txt
+ORGANIZATION_*.md
+ORGANIZATION_*.txt
+missing_files_report.txt
+index_ocr_final_nohup.log
+index_ocr_nohup.log
+index_ocr_resume_nohup.log
+index_ocr_remaining_nohup.log
