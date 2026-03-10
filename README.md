@@ -100,6 +100,136 @@ Restart Claude Code and ask: *"find something about [your topic]"*
 
 ---
 
+## Quick Start (macOS)
+
+### 1. Install system dependencies
+```bash
+brew install tesseract poppler python
+```
+Install Docker Desktop from https://www.docker.com/products/docker-desktop
+
+### 2. Install Ollama
+```bash
+brew install ollama
+ollama pull mxbai-embed-large
+ollama serve &
+```
+
+### 3. Start Qdrant
+```bash
+docker run -d \
+  --name qdrant \
+  -p 6333:6333 \
+  --restart unless-stopped \
+  -v ~/qdrant_storage:/qdrant/storage \
+  qdrant/qdrant
+```
+
+### 4. Set up Python environment
+```bash
+cd knowledge_server
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 5. Configure Claude Code
+Edit `~/.claude/settings.json`:
+```json
+{
+  "mcpServers": {
+    "knowledge-server": {
+      "command": "/Users/youruser/knowledge_server/.venv/bin/python",
+      "args": ["/Users/youruser/knowledge_server/server.py"],
+      "env": {
+        "OLLAMA_MODEL": "mxbai-embed-large",
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6333",
+        "COLLECTION_NAME": "pdf_library"
+      }
+    }
+  }
+}
+```
+
+### 6. Fix PDF viewer
+In `server.py`, find `open_pdf_page` and replace `"evince"` with `"open"`:
+```python
+subprocess.Popen(["open", "-a", "Preview", file_path])
+```
+> Note: macOS Preview doesn't support opening to a specific page via CLI. For page-level navigation install `mupdf`: `brew install mupdf-tools` and use `mupdf`.
+
+### 7. Index and search
+Same as Linux: open `ks_sandbox.ipynb`, index, restart Claude Code and search.
+
+---
+
+## Quick Start (Windows)
+
+### 1. Install system dependencies
+Install from their official sites:
+- [Python 3.10+](https://www.python.org/downloads/)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)
+- [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows/releases)
+
+### 2. Install Ollama
+Download from https://ollama.com, then in PowerShell:
+```powershell
+ollama pull mxbai-embed-large
+ollama serve
+```
+
+### 3. Start Qdrant
+```powershell
+docker run -d `
+  --name qdrant `
+  -p 6333:6333 `
+  --restart unless-stopped `
+  -v $env:USERPROFILE\qdrant_storage:/qdrant/storage `
+  qdrant/qdrant
+```
+
+### 4. Set up Python environment
+```powershell
+cd knowledge_server
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 5. Configure Claude Code
+Edit `%USERPROFILE%\.claude\settings.json`:
+```json
+{
+  "mcpServers": {
+    "knowledge-server": {
+      "command": "C:\\Users\\youruser\\knowledge_server\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\youruser\\knowledge_server\\server.py"],
+      "env": {
+        "OLLAMA_MODEL": "mxbai-embed-large",
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6333",
+        "COLLECTION_NAME": "pdf_library",
+        "TESSERACT_CMD": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+        "POPPLER_PATH": "C:\\path\\to\\poppler\\bin"
+      }
+    }
+  }
+}
+```
+
+### 6. Fix PDF viewer
+In `server.py`, find `open_pdf_page` and replace the `subprocess.Popen` line with:
+```python
+subprocess.Popen(["start", "", f"/p {page_number}", file_path], shell=True)
+```
+
+### 7. Index and search
+Same as Linux: open `ks_sandbox.ipynb`, index, restart Claude Code and search.
+
+---
+
 ## Setup
 
 ### Prerequisites
