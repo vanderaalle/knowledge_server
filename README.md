@@ -25,7 +25,8 @@ Everything runs locally. No data leaves your machine except your messages to Cla
 | Vector database | `~/qdrant_storage/` |
 | Server code | `server.py` |
 | Claude Code MCP config | `~/.claude/settings.json` |
-| Index/query notebook | `ks_sandbox.ipynb` |
+| Setup notebook | `install.ipynb` |
+| Usage notebook | `knowledge_server.ipynb` |
 
 ## Features
 - **Fast Indexing**: Uses `PyMuPDF` for high-speed text extraction.
@@ -37,7 +38,8 @@ Everything runs locally. No data leaves your machine except your messages to Cla
 - `server.py`: The main MCP server entry point.
 - `scripts/`: Utility and maintenance scripts (`manage_index.py`, `organize_books.py`, etc.).
 - `scripts/dev_legacy/`: Old dev/debug scripts, kept for reference.
-- `ks_sandbox.ipynb`: Notebook for indexing and querying interactively.
+- `install.ipynb`: Setup and dependency installation notebook.
+- `knowledge_server.ipynb`: Notebook for indexing and querying interactively.
 
 ## Quick Start (Linux)
 
@@ -160,7 +162,7 @@ subprocess.Popen(["open", "-a", "Preview", file_path])
 > Note: macOS Preview doesn't support opening to a specific page via CLI. For page-level navigation install `mupdf`: `brew install mupdf-tools` and use `mupdf`.
 
 ### 7. Index and search
-Same as Linux: open `ks_sandbox.ipynb`, index, restart Claude Code and search.
+Same as Linux: open `knowledge_server.ipynb`, index, restart Claude Code and search.
 
 ---
 
@@ -226,7 +228,7 @@ subprocess.Popen(["start", "", f"/p {page_number}", file_path], shell=True)
 ```
 
 ### 7. Index and search
-Same as Linux: open `ks_sandbox.ipynb`, index, restart Claude Code and search.
+Same as Linux: open `knowledge_server.ipynb`, index, restart Claude Code and search.
 
 ---
 
