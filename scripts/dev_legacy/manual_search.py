@@ -6,16 +6,54 @@ Script manuale per interrogare Qdrant con supporto ai nuovi metadati e tool.
 import sys
 import os
 import hashlib
+import platform
+import shutil
+import subprocess
 from pathlib import Path
 import ollama
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+from prompt_toolkit import prompt
+from prompt_toolkit.shortcuts import radiolist_dialog
+from prompt_toolkit.styles import Style
 
 # Configurazione
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'nomic-embed-text')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'mxbai-embed-large')
 QDRANT_HOST = os.getenv('QDRANT_HOST', 'localhost')
 QDRANT_PORT = int(os.getenv('QDRANT_PORT', '6333'))
-COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'knowledge_base')
+COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'pdf_library')
+
+def open_pdf(file_path, page_number=1):
+    """Open a PDF at a specific page using the system viewer."""
+    if not os.path.exists(file_path):
+        print(f"❌ File not found: {file_path}")
+        return
+    system = platform.system()
+    if system == "Darwin":
+        script = (
+            f'tell application "Preview" to open POSIX file "{file_path}"\n'
+            f'delay 1\n'
+            f'tell application "Preview" to tell front document '
+            f'to set current page to page {page_number}'
+        )
+        subprocess.Popen(["osascript", "-e", script])
+    elif system == "Windows":
+        sumatra = shutil.which("SumatraPDF")
+        if sumatra:
+            subprocess.Popen([sumatra, "-page", str(page_number), file_path])
+        else:
+            os.startfile(file_path)
+    else:
+        if shutil.which("evince"):
+            subprocess.Popen(["evince", f"--page-index={page_number - 1}", file_path])
+        elif shutil.which("okular"):
+            subprocess.Popen(["okular", "--page", str(page_number), file_path])
+        elif shutil.which("zathura"):
+            subprocess.Popen(["zathura", "--page", str(page_number - 1), file_path])
+        else:
+            subprocess.Popen(["xdg-open", file_path])
+    print(f"✅ Opened {os.path.basename(file_path)} at page {page_number}")
+
 
 def get_client():
     """Get Qdrant client"""
@@ -30,61 +68,92 @@ def calculate_file_hash(file_path):
     return hash_md5.hexdigest()
 
 def search(query, limit=5):
-    """Ricerca semantica con visualizzazione metadati ricchi"""
-    print(f"🔍 Ricerca per: '{query}'")
-    print(f"   Modello: {OLLAMA_MODEL}")
+    """Semantic search with rich metadata display"""
+    print(f"🔍 Searching for: '{query}'")
+    print(f"   Model: {OLLAMA_MODEL}")
     print(f"   Collection: {COLLECTION_NAME}\n")
-    
+
     try:
-        # 1. Genera embedding per la query
-        print("⚙️  Generazione embedding...")
+        print("⚙️  Generating embedding...")
         response = ollama.embeddings(model=OLLAMA_MODEL, prompt=query)
         query_vector = response["embedding"]
 
-        # 2. Cerca in Qdrant
-        print(f"🗄️  Interrogazione Qdrant...")
+        print(f"🗄️  Querying Qdrant...")
         client = get_client()
-        
+
         search_result = client.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_vector,
             limit=limit
         )
 
-        # 3. Stampa risultati con metadati ricchi
         print(f"\n{'='*70}")
-        print(f"📊 Trovati {len(search_result)} risultati")
+        print(f"📊 Found {len(search_result)} results")
         print(f"{'='*70}\n")
-        
+
+        hits = []
         for i, result in enumerate(search_result):
             metadata = result.payload.get('metadata', {})
             text = result.payload.get('text', '')
-            
+            hits.append((metadata, text, result.score))
+
             print(f"{'─'*70}")
-            print(f"📄 Risultato {i+1} | Score: {result.score:.4f}")
+            print(f"📄 Result {i+1} | Score: {result.score:.4f}")
             print(f"{'─'*70}")
-            print(f"📚 Documento:  {metadata.get('document_title', 'N/A')}")
+            print(f"📚 Document:   {metadata.get('document_title', 'N/A')}")
             print(f"📄 File:       {metadata.get('source', 'N/A')}")
-            print(f"📍 Pagina:     {metadata.get('page_number', 'N/A')} / {metadata.get('total_pages', 'N/A')}")
+            print(f"📍 Page:       {metadata.get('page_number', 'N/A')} / {metadata.get('total_pages', 'N/A')}")
             print(f"🧩 Chunk:      {metadata.get('chunk_index', 'N/A')} / {metadata.get('total_chunks', 'N/A')}")
-            print(f"🏷️  Tipo:       {metadata.get('level', 'text')} ({metadata.get('content_type', 'text')})")
-            print(f"🔗 File hash:  {metadata.get('file_hash', 'N/A')[:16]}...")
-            
+            print(f"🔗 File hash:  {metadata.get('file_hash', 'N/A')}")
+
             if metadata.get('heading_context'):
-                print(f"📌 Contesto:   {metadata.get('heading_context')[:80]}...")
-            
-            print(f"\n📝 Testo:")
+                print(f"📌 Context:    {metadata.get('heading_context')[:80]}...")
+
+            print(f"\n📝 Text:")
             print(f"{text[:800]}{'...' if len(text) > 800 else ''}")
             print(f"{'─'*70}\n")
 
+        # Interactive picker
+        if sys.stdin.isatty():
+            choices = [
+                (
+                    str(i),
+                    f"[{score:.3f}] {meta.get('document_title', 'N/A')}  —  p. {meta.get('page_number', '?')}"
+                )
+                for i, (meta, _, score) in enumerate(hits)
+            ]
+            choices.append(("skip", "— don't open anything —"))
+
+            style = Style.from_dict({"dialog.body": "bg:#1e1e2e", "button": "bg:#89b4fa"})
+            selected = radiolist_dialog(
+                title="Open PDF",
+                text="Select a result to open:",
+                values=choices,
+                style=style,
+            ).run()
+
+            if selected is not None and selected != "skip":
+                meta, _, _ = hits[int(selected)]
+                source_path = meta.get('source_path') or meta.get('source', '')
+                page = meta.get('page_number', 1)
+                open_pdf(source_path, page)
+        else:
+            print("Open which result? (number, or Enter to skip): ", end="", flush=True)
+            choice = input().strip()
+            if choice.isdigit() and 0 < int(choice) <= len(hits):
+                meta, _, _ = hits[int(choice) - 1]
+                source_path = meta.get('source_path') or meta.get('source', '')
+                page = meta.get('page_number', 1)
+                open_pdf(source_path, page)
+
     except Exception as e:
-        print(f"❌ Errore durante la ricerca: {e}")
+        print(f"❌ Error during search: {e}")
         import traceback
         traceback.print_exc()
 
 def get_document_info(file_hash):
-    """Ottieni informazioni su un documento specifico"""
-    print(f"📋 Info documento: {file_hash[:16]}...")
+    """Get information about a specific document"""
+    print(f"📋 Document info: {file_hash[:16]}...")
     
     try:
         client = get_client()
@@ -118,7 +187,7 @@ def get_document_info(file_hash):
             offset = next_offset
         
         if not all_chunks:
-            print("❌ Nessun documento trovato con questo hash")
+            print("❌ No document found with this hash")
             return
         
         # Estrai metadati dal primo chunk
@@ -126,18 +195,17 @@ def get_document_info(file_hash):
         metadata = first_chunk.payload.get('metadata', {})
         
         print(f"\n{'='*70}")
-        print(f"📚 {metadata.get('document_title', 'Documento senza titolo')}")
+        print(f"📚 {metadata.get('document_title', 'Untitled document')}")
         print(f"{'='*70}")
         print(f"📄 File:       {metadata.get('source', 'N/A')}")
-        print(f"📍 Pagine:     {metadata.get('total_pages', 'N/A')}")
+        print(f"📍 Pages:      {metadata.get('total_pages', 'N/A')}")
         print(f"🧩 Chunks:     {len(all_chunks)} / {metadata.get('total_chunks', 'N/A')}")
-        print(f"📏 Dimensione: {metadata.get('file_size', 0) / 1024:.1f} KB")
+        print(f"📏 Size:       {metadata.get('file_size', 0) / 1024:.1f} KB")
         print(f"🔗 Hash:       {file_hash}")
-        
-        # Trova tutti gli heading
-        print(f"\n📑 Struttura (headings trovati):")
+
+        print(f"\n📑 Structure (headings found):")
         print(f"{'─'*70}")
-        
+
         headings_found = []
         for chunk in sorted(all_chunks, key=lambda x: x.payload.get('metadata', {}).get('chunk_index', 0)):
             level = chunk.payload.get('metadata', {}).get('level', 'paragraph')
@@ -145,27 +213,26 @@ def get_document_info(file_hash):
                 page = chunk.payload.get('metadata', {}).get('page_number', '?')
                 text = chunk.payload.get('text', '')[:60]
                 headings_found.append((level, page, text))
-        
+
         if headings_found:
-            for level, page, text in headings_found[:20]:  # Mostra primi 20
+            for level, page, text in headings_found[:20]:
                 indent = "  " * (0 if level == 'title' else 1 if level == 'h1' else 2)
-                print(f"{indent}[{level.upper():6}] Pag. {page:3}: {text}...")
-            
+                print(f"{indent}[{level.upper():6}] p. {page:3}: {text}...")
             if len(headings_found) > 20:
-                print(f"\n  ... e altri {len(headings_found) - 20} headings")
+                print(f"\n  ... and {len(headings_found) - 20} more headings")
         else:
-            print("  Nessun heading rilevato")
-            
+            print("  No headings detected")
+
         print(f"{'='*70}\n")
-        
+
     except Exception as e:
-        print(f"❌ Errore: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
 
 def read_page(file_hash, page_number):
-    """Leggi una pagina specifica di un documento"""
-    print(f"📖 Lettura pagina {page_number}...")
+    """Read a specific page of a document"""
+    print(f"📖 Reading page {page_number}...")
     
     try:
         client = get_client()
@@ -193,18 +260,17 @@ def read_page(file_hash, page_number):
         chunks = result[0]
         
         if not chunks:
-            print(f"❌ Nessun contenuto trovato per pagina {page_number}")
+            print(f"❌ No content found for page {page_number}")
             return
-        
-        # Ordina per chunk_index
+
         chunks.sort(key=lambda x: x.payload.get('metadata', {}).get('chunk_index', 0))
-        
+
         metadata = chunks[0].payload.get('metadata', {})
-        
+
         print(f"\n{'='*70}")
-        print(f"📚 {metadata.get('document_title', 'Documento')}")
-        print(f"📄 Pagina {page_number} / {metadata.get('total_pages', 'N/A')}")
-        print(f"🧩 {len(chunks)} chunk(s) in questa pagina")
+        print(f"📚 {metadata.get('document_title', 'Document')}")
+        print(f"📄 Page {page_number} / {metadata.get('total_pages', 'N/A')}")
+        print(f"🧩 {len(chunks)} chunk(s) on this page")
         print(f"{'='*70}\n")
         
         for chunk in chunks:
@@ -223,13 +289,13 @@ def read_page(file_hash, page_number):
         print(f"{'='*70}\n")
         
     except Exception as e:
-        print(f"❌ Errore: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
 
 def reconstruct_document(file_hash, max_chars=None):
-    """Ricostruisci un documento completo dai chunk"""
-    print(f"🏗️  Ricostruzione documento: {file_hash[:16]}...")
+    """Reconstruct a full document from its chunks"""
+    print(f"🏗️  Reconstructing document: {file_hash[:16]}...")
     
     try:
         client = get_client()
@@ -263,19 +329,18 @@ def reconstruct_document(file_hash, max_chars=None):
             offset = next_offset
         
         if not all_chunks:
-            print("❌ Nessun documento trovato")
+            print("❌ Document not found")
             return
-        
-        # Ordina per chunk_index
+
         all_chunks.sort(key=lambda x: x.payload.get('metadata', {}).get('chunk_index', 0))
-        
+
         metadata = all_chunks[0].payload.get('metadata', {})
-        
+
         print(f"\n{'='*70}")
-        print(f"📚 {metadata.get('document_title', 'Documento')}")
+        print(f"📚 {metadata.get('document_title', 'Document')}")
         print(f"📄 {metadata.get('source', 'N/A')}")
-        print(f"📍 {metadata.get('total_pages', 'N/A')} pagine")
-        print(f"🧩 {len(all_chunks)} chunks ricostruiti")
+        print(f"📍 {metadata.get('total_pages', 'N/A')} pages")
+        print(f"🧩 {len(all_chunks)} chunks reconstructed")
         print(f"{'='*70}\n")
         
         # Ricostruisci testo
@@ -286,22 +351,22 @@ def reconstruct_document(file_hash, max_chars=None):
         
         if max_chars and len(full_text) > max_chars:
             print(full_text[:max_chars])
-            print(f"\n... [troncato, totale: {len(full_text)} caratteri]")
+            print(f"\n... [truncated, total: {len(full_text)} characters]")
         else:
             print(full_text)
-        
+
         print(f"\n{'='*70}")
-        print(f"✅ Documento ricostruito: {len(full_text)} caratteri")
+        print(f"✅ Document reconstructed: {len(full_text)} characters")
         print(f"{'='*70}\n")
-        
+
     except Exception as e:
-        print(f"❌ Errore: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
 
 def list_documents():
-    """Elenca tutti i documenti indicizzati"""
-    print(f"📚 Elenco documenti in '{COLLECTION_NAME}':\n")
+    """List all indexed documents"""
+    print(f"📚 Documents in '{COLLECTION_NAME}':\n")
     
     try:
         client = get_client()
@@ -327,41 +392,39 @@ def list_documents():
             offset = next_offset
         
         if not all_points:
-            print("❌ Nessun documento trovato")
+            print("❌ No documents found")
             return
-        
-        # Raggruppa per file_hash
+
         documents = {}
         for point in all_points:
             metadata = point.payload.get('metadata', {})
             file_hash = metadata.get('file_hash', 'unknown')
-            
+
             if file_hash not in documents:
                 documents[file_hash] = {
-                    'title': metadata.get('document_title', 'Senza titolo'),
+                    'title': metadata.get('document_title', 'Untitled'),
                     'source': metadata.get('source', 'N/A'),
                     'pages': metadata.get('total_pages', 0),
                     'chunks': 0,
                     'file_size': metadata.get('file_size', 0)
                 }
-            
+
             documents[file_hash]['chunks'] += 1
-        
-        # Stampa risultati
-        print(f"Trovati {len(documents)} documenti:\n")
-        print(f"{'Hash':<18} {'Titolo':<35} {'Pagine':<8} {'Chunks':<8}")
+
+        print(f"Found {len(documents)} documents:\n")
+        print(f"{'Hash':<18} {'Title':<35} {'Pages':<8} {'Chunks':<8}")
         print(f"{'─'*70}")
-        
+
         for file_hash, info in sorted(documents.items(), key=lambda x: x[1]['title']):
             title = info['title'][:32] + '...' if len(info['title']) > 35 else info['title']
             print(f"{file_hash[:16]:<18} {title:<35} {info['pages']:<8} {info['chunks']:<8}")
-        
-        print(f"\n💡 Usa: python manual_search.py info <hash> per dettagli")
-        print(f"💡 Usa: python manual_search.py page <hash> <num_pagina> per leggere una pagina")
-        print(f"💡 Usa: python manual_search.py reconstruct <hash> per ricostruire il documento\n")
-        
+
+        print(f"\n💡 Use: python manual_search.py info <hash> for details")
+        print(f"💡 Use: python manual_search.py page <hash> <page_num> to read a page")
+        print(f"💡 Use: python manual_search.py reconstruct <hash> to reconstruct the document\n")
+
     except Exception as e:
-        print(f"❌ Errore: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
 
@@ -371,25 +434,25 @@ def print_help():
 📖 KNOWLEDGE SERVER - MANUAL SEARCH TOOL
 {'='*70}
 
-USO:
-  python manual_search.py <comando> [argomenti]
+USAGE:
+  python manual_search.py <command> [arguments]
 
-COMANDI:
-  search "query"              Ricerca semantica (default)
-  list                        Elenca tutti i documenti indicizzati
-  info <hash>                 Mostra info e struttura di un documento
-  page <hash> <n>             Leggi pagina specifica di un documento
-  reconstruct <hash> [max]    Ricostruisci documento completo
-  help                        Mostra questo aiuto
+COMMANDS:
+  search "query"              Semantic search (default)
+  list                        List all indexed documents
+  info <hash>                 Show document info and structure
+  page <hash> <n>             Read a specific page of a document
+  reconstruct <hash> [max]    Reconstruct full document
+  help                        Show this help
 
-ESEMPI:
-  python manual_search.py "intelligenza artificiale"
+EXAMPLES:
+  python manual_search.py "semethic interaction"
   python manual_search.py list
   python manual_search.py info abc123def456...
   python manual_search.py page abc123def456... 5
   python manual_search.py reconstruct abc123def456... 5000
 
-CONFIGURAZIONE:
+CONFIG:
   OLLAMA_MODEL: {OLLAMA_MODEL}
   QDRANT: {QDRANT_HOST}:{QDRANT_PORT}
   COLLECTION: {COLLECTION_NAME}

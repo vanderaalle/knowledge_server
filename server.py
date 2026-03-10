@@ -12,6 +12,15 @@ Features:
 import os
 import sys
 import re
+
+# Suppress MuPDF noise (cmsOpenProfileFromMem, appearance stream errors).
+# Covers both C-level fd 2 and Python-level sys.stderr (used by PyMuPDF in Jupyter).
+# Our own messages use print() → stdout, so this is safe.
+_devnull_fd = os.open(os.devnull, os.O_WRONLY)
+os.dup2(_devnull_fd, 2)
+os.close(_devnull_fd)
+del _devnull_fd
+sys.stderr = open(os.devnull, 'w')
 import time
 import hashlib
 import asyncio
@@ -19,6 +28,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Set
 from dataclasses import dataclass
 import concurrent.futures
+import platform
+import shutil
 
 # Fast PDF Library
 try:
@@ -40,6 +51,10 @@ TESSERACT_CMD = os.getenv('TESSERACT_CMD', '/opt/homebrew/bin/tesseract')
 POPPLER_PATH = os.getenv('POPPLER_PATH', '/opt/homebrew/bin')
 if os.path.exists(TESSERACT_CMD):
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+
+import logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 import ollama
 from qdrant_client import QdrantClient
@@ -171,7 +186,6 @@ class PDFProcessor:
         """
         try:
             doc = fitz.open(pdf_path)
-            fitz.TOOLS.mupdf_warnings()  # flush/suppress pending warnings
             total_pages = len(doc)
             page_texts = []
             full_text = ""
@@ -182,8 +196,6 @@ class PDFProcessor:
                 text = content.get_text()
                 page_texts.append(text)
                 full_text += text + "\n"
-
-            fitz.TOOLS.mupdf_warnings()  # clear any warnings generated during extraction
             doc.close()
             
             # --- Slow Path: OCR Fallback ---
@@ -325,6 +337,30 @@ class VectorDBClient:
         except Exception as e:
             pass # print(f"Error upserting points: {e}", file=sys.stderr)
 
+    def get_all_indexed_hashes(self) -> Set[str]:
+        """Load all indexed file hashes in one shot."""
+        hashes = set()
+        try:
+            offset = None
+            while True:
+                result, next_offset = self.client.scroll(
+                    collection_name=COLLECTION_NAME,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=["metadata.file_hash"],
+                    with_vectors=False
+                )
+                for point in result:
+                    h = (point.payload or {}).get("metadata", {}).get("file_hash")
+                    if h:
+                        hashes.add(h)
+                if next_offset is None:
+                    break
+                offset = next_offset
+        except:
+            pass
+        return hashes
+
     def is_file_indexed(self, file_hash: str) -> bool:
         """Controlla se file già indicizzato"""
         try:
@@ -451,6 +487,15 @@ class VectorDBClient:
             return False
 
 
+def _suppress_stderr():
+    """Redirect fd 2 to /dev/null to silence MuPDF C-level noise."""
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull_fd, 2)
+    os.close(devnull_fd)
+
+def _worker_init():
+    _suppress_stderr()
+
 # Inizializza globali
 pdf_processor = PDFProcessor()
 # Lazy init di vector_db per evitare problemi di connessione all'avvio se non serve
@@ -483,7 +528,7 @@ def _process_single_pdf(args):
     NON fa chiamate al DB o a Ollama qui per evitare overhead di pickling connessioni.
     Ritorna dict con dati pronti per embedding.
     """
-    file_path, directory_path, use_ocr = args
+    file_path, directory_path, use_ocr, indexed_hashes = args
     result = {
         "status": "error",
         "file_path": str(file_path),
@@ -491,12 +536,15 @@ def _process_single_pdf(args):
         "chunks": [],
         "skip_reason": None
     }
-    
+
     try:
-        # 1. Calc Hash
+        # 1. Calc Hash — bail out early if already indexed
         current_hash = _calculate_file_hash(file_path)
         result["file_hash"] = current_hash
-        
+        if current_hash in indexed_hashes:
+            result["status"] = "already_indexed"
+            return result
+
         # 2. Extract Text
         text, page_texts, total_pages, used_ocr = pdf_processor.extract_text_from_pdf(
             str(file_path), use_ocr=use_ocr
@@ -580,8 +628,9 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
     # Phase C: Main thread checks DB (hash already computed) -> if exists allow skip.
     # Phase D: Embedding + Upsert (Parallel).
     
-    pass # print(f"📊 Process {total_pdfs} PDFs with {MAX_WORKERS} workers", file=sys.stderr)
-    
+    # Load all known hashes upfront — one DB call instead of one per file
+    indexed_hashes = db.get_all_indexed_hashes()
+
     stats = {
         "indexed": 0,
         "skipped": 0,
@@ -590,7 +639,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
     }
     
     # Prepare args for workers
-    worker_args = [(p, directory_path, use_ocr) for p in all_pdfs]
+    worker_args = [(p, directory_path, use_ocr, indexed_hashes) for p in all_pdfs]
     
     # Using ThreadPool is easier for IO bound (Ollama), but Parsing is CPU bound.
     # Hybrid approach:
@@ -600,7 +649,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
     # Since we can't easily share the huge QdrantClient/OllamaClient across processes,
     # We use ProcessPool to generate Chunks, then Main thread (or ThreadPool) to Embed & Upsert.
     
-    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, initializer=_worker_init) as executor:
         # Submit all parsing jobs
         # Use tqdm for progress
         futures = {executor.submit(_process_single_pdf, arg): arg[0] for arg in worker_args}
@@ -610,23 +659,22 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
             try:
                 res = future.result()
                 
+                if res["status"] == "already_indexed":
+                    stats["skipped"] += 1
+                    continue
+
                 if res["status"] == "error":
-                    pass # print(f"❌ Error processing {file_path.name}: {res.get('error_message')}", file=sys.stderr)
+                    print(f"❌ Error: {file_path.name}: {res.get('error_message')}")
                     stats["errors"] += 1
                     continue
-                
+
                 if res["status"] == "skipped_ocr":
                     stats["ocr_skipped"] += 1
                     continue
-                
+
                 if res["status"] == "error_no_text":
+                    print(f"⚠️  No text: {file_path.name}")
                     stats["errors"] += 1
-                    continue
-                
-                # Check duplication
-                if db.is_file_indexed(res["file_hash"]):
-                    #pass # print(f"  ⏭️  Already indexed: {file_path.name}", file=sys.stderr)
-                    stats["skipped"] += 1
                     continue
                 
                 # Now we have chunks ready for embedding.
@@ -634,7 +682,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                 # For simplicity, do it here. Ollama is likely the bottleneck.
                 chunks: List[TextChunk] = res["chunks"]
                 ocr_tag = " [OCR]" if res.get("used_ocr") else ""
-                print(f"⏳ Embedding: {file_path.name} ({len(chunks)} chunks){ocr_tag}", file=sys.stderr)
+                print(f"⏳ Embedding: {file_path.name} ({len(chunks)} chunks){ocr_tag}")
 
                 points = []
                 for chunk in chunks:
@@ -672,7 +720,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                 if points:
                     db.upsert_points(points)
                     stats["indexed"] += 1
-                    print(f"  ✅ Done: {file_path.name} ({len(points)} chunks)", file=sys.stderr)
+                    print(f"  ✅ Done: {file_path.name} ({len(points)} chunks)")
             
             except Exception as e:
                 pass # print(f"CRITICAL ERROR processing {file_path}: {e}", file=sys.stderr)
@@ -799,6 +847,7 @@ def query_library(query: str, n_results: int = 5) -> str:
                 f"{i}. [{result['score']:.3f}] {meta.get('document_title', 'Unknown')}\n"
                 f"   Page {meta.get('page_number', '?')}/{meta.get('total_pages', '?')}\n"
                 f"   Path: {meta.get('source_path', meta.get('source', 'N/A'))}\n"
+                f"   Hash: {meta.get('file_hash', 'N/A')}\n"
                 f"   {result['text'][:300]}...\n"
             )
         return "\n".join(formatted)
@@ -841,12 +890,39 @@ def reconstruct_document(file_hash: str) -> str:
 
 @mcp.tool()
 def open_pdf_page(file_path: str, page_number: int = 1) -> str:
-    """Open a PDF file at a specific page using the system PDF viewer."""
+    """Open a PDF file at a specific page using the system default PDF viewer."""
     import subprocess
     if not os.path.exists(file_path):
         return f"❌ File not found: {file_path}"
     try:
-        subprocess.Popen(["evince", f"--page-label={page_number}", file_path])
+        system = platform.system()
+        if system == "Darwin":
+            # AppleScript: open in Preview and jump to page
+            script = (
+                f'tell application "Preview" to open POSIX file "{file_path}"\n'
+                f'delay 1\n'
+                f'tell application "Preview" to tell front document '
+                f'to set current page to page {page_number}'
+            )
+            subprocess.Popen(["osascript", "-e", script])
+        elif system == "Windows":
+            # SumatraPDF supports -page; fall back to os.startfile
+            sumatra = shutil.which("SumatraPDF")
+            if sumatra:
+                subprocess.Popen([sumatra, "-page", str(page_number), file_path])
+            else:
+                os.startfile(file_path)
+        else:
+            # Linux: try evince, okular, zathura in order
+            if shutil.which("evince"):
+                subprocess.Popen(["evince", f"--page-index={page_number - 1}", file_path])
+            elif shutil.which("okular"):
+                subprocess.Popen(["okular", "--page", str(page_number), file_path])
+            elif shutil.which("zathura"):
+                subprocess.Popen(["zathura", "--page", str(page_number - 1), file_path])
+            else:
+                subprocess.Popen(["xdg-open", file_path])
+                return f"✅ Opened {os.path.basename(file_path)} (page navigation not supported by default viewer)"
         return f"✅ Opened {os.path.basename(file_path)} at page {page_number}"
     except Exception as e:
         return f"❌ Could not open PDF: {e}"
