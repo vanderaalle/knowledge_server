@@ -93,7 +93,7 @@ Edit `~/.claude/settings.json` (replace paths with your actual paths):
 ```
 
 ### 6. Index your PDFs
-Open `ks_sandbox.ipynb`, set `PDF_DIR` to your folder, and run the indexing cell.
+Open `knowledge_server.ipynb`, set `PDF_DIR` to your folder, and run the indexing cell.
 
 ### 7. Search
 Restart Claude Code and ask: *"find something about [your topic]"*
@@ -393,4 +393,23 @@ Claude: [opens Grisey - Temporal Spaces at page 17 in Document Viewer]
    search_annas_archive("generative deep learning", limit=3)
    download_from_annas_archive("c17f7a3108c48634ff635f34497c977b")
    ```
+
+---
+
+## Workflow: Calibre + Knowledge Server
+
+A good pairing: use **Calibre** to manage your PDF library (organize, tag, convert, read), and let the knowledge server handle semantic search on top of it.
+
+1. Add books to Calibre normally — it stores them under `~/Calibre Library/` by default.
+2. Point the indexer at your Calibre library:
+   ```
+   index_library("/home/youruser/Calibre Library")
+   ```
+3. Search with natural language via Claude Code or `manual_search.py`:
+   ```
+   query_library("semiotic interaction and sound")
+   ```
+4. Claude returns ranked results with titles, pages, and snippets — pick one and it opens in your PDF viewer at the exact page.
+
+Calibre keeps doing what it does best (library management, format conversion, metadata editing). The knowledge server adds a semantic layer on top, without touching or duplicating your files.
 
