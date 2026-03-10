@@ -171,17 +171,19 @@ class PDFProcessor:
         """
         try:
             doc = fitz.open(pdf_path)
+            fitz.TOOLS.mupdf_warnings()  # flush/suppress pending warnings
             total_pages = len(doc)
             page_texts = []
             full_text = ""
             used_ocr = False
-            
+
             # --- Fast Path: PyMuPDF ---
             for content in doc:
                 text = content.get_text()
                 page_texts.append(text)
                 full_text += text + "\n"
-            
+
+            fitz.TOOLS.mupdf_warnings()  # clear any warnings generated during extraction
             doc.close()
             
             # --- Slow Path: OCR Fallback ---
@@ -500,6 +502,7 @@ def _process_single_pdf(args):
             str(file_path), use_ocr=use_ocr
         )
         
+        result["used_ocr"] = used_ocr
         if used_ocr and not use_ocr:
             result["status"] = "skipped_ocr"
             return result
@@ -630,7 +633,9 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                 # Do this in current thread (or another ThreadPool if we want to pipeline parsing/embedding)
                 # For simplicity, do it here. Ollama is likely the bottleneck.
                 chunks: List[TextChunk] = res["chunks"]
-                
+                ocr_tag = " [OCR]" if res.get("used_ocr") else ""
+                print(f"⏳ Embedding: {file_path.name} ({len(chunks)} chunks){ocr_tag}", file=sys.stderr)
+
                 points = []
                 for chunk in chunks:
                     try:
@@ -667,7 +672,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                 if points:
                     db.upsert_points(points)
                     stats["indexed"] += 1
-                    #pass # print(f"  ✅ Indexed {file_path.name} ({len(points)} chunks)", file=sys.stderr)
+                    print(f"  ✅ Done: {file_path.name} ({len(points)} chunks)", file=sys.stderr)
             
             except Exception as e:
                 pass # print(f"CRITICAL ERROR processing {file_path}: {e}", file=sys.stderr)
@@ -792,8 +797,8 @@ def query_library(query: str, n_results: int = 5) -> str:
             meta = result['metadata']
             formatted.append(
                 f"{i}. [{result['score']:.3f}] {meta.get('document_title', 'Unknown')}\n"
-                f"   Pagina {meta.get('page_number', '?')}/{meta.get('total_pages', '?')}\n"
-                f"   File: {meta.get('source', 'N/A')}\n"
+                f"   Page {meta.get('page_number', '?')}/{meta.get('total_pages', '?')}\n"
+                f"   Path: {meta.get('source_path', meta.get('source', 'N/A'))}\n"
                 f"   {result['text'][:300]}...\n"
             )
         return "\n".join(formatted)
@@ -832,6 +837,19 @@ def reconstruct_document(file_hash: str) -> str:
 
 
 
+
+
+@mcp.tool()
+def open_pdf_page(file_path: str, page_number: int = 1) -> str:
+    """Open a PDF file at a specific page using the system PDF viewer."""
+    import subprocess
+    if not os.path.exists(file_path):
+        return f"❌ File not found: {file_path}"
+    try:
+        subprocess.Popen(["evince", f"--page-label={page_number}", file_path])
+        return f"✅ Opened {os.path.basename(file_path)} at page {page_number}"
+    except Exception as e:
+        return f"❌ Could not open PDF: {e}"
 
 
 @mcp.tool()

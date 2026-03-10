@@ -2,6 +2,31 @@
 
 A powerful MCP server for managing a semantic PDF library with indexing and OCR capabilities.
 
+## How it works
+
+Your PDF library lives on disk. When you index it, `server.py` extracts text from each file (fast via PyMuPDF, with OCR fallback for scanned books), splits it into chunks, and sends each chunk to a local Ollama model (`mxbai-embed-large`) which converts it into an **embedding** — a list of 1024 numbers that captures the semantic meaning of the text. These are stored in **Qdrant**, a vector database running in Docker on your machine.
+
+When you search, your query goes through the same process: converted to numbers, then Qdrant finds the stored chunks whose numbers are most similar. No keywords needed — just natural language.
+
+If you connect this server to **Claude Code** via MCP, you can ask Claude questions directly and it will query your library under the hood.
+
+```
+You ask a question
+  → Claude converts it to an embedding (via Ollama)
+  → Qdrant finds the most similar PDF chunks
+  → Claude reads them and answers you
+```
+
+Everything runs locally. No data leaves your machine except your messages to Claude.
+
+### Key paths
+| What | Where |
+|------|-------|
+| Vector database | `~/qdrant_storage/` |
+| Server code | `server.py` |
+| Claude Code MCP config | `~/.claude/settings.json` |
+| Index/query notebook | `ks_sandbox.ipynb` |
+
 ## Features
 - **Fast Indexing**: Uses `PyMuPDF` for high-speed text extraction.
 - **OCR Support**: Fallback to Tesseract OCR for scans and images.
@@ -10,9 +35,70 @@ A powerful MCP server for managing a semantic PDF library with indexing and OCR 
 
 ## Structure
 - `server.py`: The main MCP server entry point.
-- `index_remaining_ocr.py`: Main utility for incremental indexing and OCR.
-- `scripts/`: Collection of utility and maintenance scripts.
-- `mcp_settings.json`: Configuration for the MCP client.
+- `scripts/`: Utility and maintenance scripts (`manage_index.py`, `organize_books.py`, etc.).
+- `scripts/dev_legacy/`: Old dev/debug scripts, kept for reference.
+- `ks_sandbox.ipynb`: Notebook for indexing and querying interactively.
+
+## Quick Start (Linux)
+
+### 1. Install system dependencies
+```bash
+sudo apt install docker.io tesseract-ocr poppler-utils python3 python3-venv
+```
+
+### 2. Install Ollama
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull mxbai-embed-large
+ollama serve &
+```
+
+### 3. Start Qdrant
+```bash
+sudo docker run -d \
+  --name qdrant \
+  -p 6333:6333 \
+  --restart unless-stopped \
+  -v ~/qdrant_storage:/qdrant/storage \
+  qdrant/qdrant
+```
+
+### 4. Set up Python environment
+```bash
+cd knowledge_server
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 5. Configure Claude Code
+Edit `~/.claude/settings.json` (replace paths with your actual paths):
+```json
+{
+  "mcpServers": {
+    "knowledge-server": {
+      "command": "/home/youruser/knowledge_server/.venv/bin/python",
+      "args": ["/home/youruser/knowledge_server/server.py"],
+      "env": {
+        "OLLAMA_MODEL": "mxbai-embed-large",
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6333",
+        "COLLECTION_NAME": "pdf_library"
+      }
+    }
+  }
+}
+```
+
+### 6. Index your PDFs
+Open `ks_sandbox.ipynb`, set `PDF_DIR` to your folder, and run the indexing cell.
+
+### 7. Search
+Restart Claude Code and ask: *"find something about [your topic]"*
+
+> **Note:** `open_pdf_page` uses `evince` (Document Viewer on Ubuntu/Debian). On macOS replace `evince` with `open` in `server.py`. On Windows use `start`.
+
+---
 
 ## Setup
 
@@ -23,10 +109,17 @@ A powerful MCP server for managing a semantic PDF library with indexing and OCR 
    ollama serve
    ```
 
-2. **Qdrant** running on port 6333:
+2. **Qdrant** running on port 6333, with a persistent bind mount so your indexed data survives container restarts and is easy to back up:
    ```bash
-   docker run -d -p 6333:6333 qdrant/qdrant
+   docker run -d \
+     --name qdrant \
+     -p 6333:6333 \
+     --restart unless-stopped \
+     -v ~/qdrant_storage:/qdrant/storage \
+     qdrant/qdrant
    ```
+   The database will be stored at `~/qdrant_storage/` on your machine.
+   > **Warning:** the plain `docker run -d -p 6333:6333 qdrant/qdrant` command stores data inside the container — it will be lost if the container is removed.
 
 3. **Python dependencies**:
    ```bash
@@ -57,6 +150,27 @@ Edit your MCP settings file (usually at `~/Library/Application Support/Antigravi
       },
       "disabled": false,
       "autoApprove": []
+    }
+  }
+}
+```
+
+#### For Claude Code
+
+Edit `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "knowledge-server": {
+      "command": "/path/to/knowledge_server/.venv/bin/python",
+      "args": ["/path/to/knowledge_server/server.py"],
+      "env": {
+        "OLLAMA_MODEL": "mxbai-embed-large",
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6333",
+        "COLLECTION_NAME": "pdf_library"
+      }
     }
   }
 }
@@ -104,8 +218,31 @@ Once configured, the following tools are available:
 - **`get_document_info(file_hash)`** - Get document metadata
 - **`read_page(file_hash, page_number)`** - Read a specific page
 - **`reconstruct_document(file_hash)`** - Reconstruct full document text
+- **`open_pdf_page(file_path, page_number)`** - Open a PDF at a specific page in Document Viewer
 - **`search_annas_archive(query, limit)`** - Search Anna's Archive for books
 - **`download_from_annas_archive(md5)`** - Download books from Anna's Archive
+
+### Searching with Claude Code
+
+When the MCP server is connected, ask Claude naturally and it will search your library and present numbered results:
+
+```
+You:   "find something about spectral harmony"
+
+Claude: Found 5 results:
+
+        1. Murail - Spectral Music (p.42/210)
+           "...the harmonic series as a structural principle..."
+
+        2. Grisey - Temporal Spaces (p.17/180)
+           "...spectral harmony differs from traditional tonality..."
+
+        Open which? (e.g. "1", "2 and 3", "all")
+
+You:   "2"
+
+Claude: [opens Grisey - Temporal Spaces at page 17 in Document Viewer]
+```
 
 ### Usage Example
 
