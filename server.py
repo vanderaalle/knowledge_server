@@ -48,7 +48,8 @@ from PIL import Image
 
 # OCR Configuration
 TESSERACT_CMD = os.getenv('TESSERACT_CMD', '/opt/homebrew/bin/tesseract')
-POPPLER_PATH = os.getenv('POPPLER_PATH', '/opt/homebrew/bin')
+_poppler_default = '/opt/homebrew/bin'
+POPPLER_PATH = os.getenv('POPPLER_PATH', _poppler_default if os.path.exists(_poppler_default) else None)
 if os.path.exists(TESSERACT_CMD):
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
