@@ -640,6 +640,8 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
         "errors": 0,
         "ocr_skipped": 0
     }
+    start_time = time.time()
+    total_vectors = 0
     
     # Prepare args for workers
     worker_args = [(p, directory_path, use_ocr, indexed_hashes) for p in all_pdfs]
@@ -723,7 +725,18 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                 if points:
                     db.upsert_points(points)
                     stats["indexed"] += 1
-                    print(f"  ✅ Done: {file_path.name} ({len(points)} chunks)")
+                    total_vectors += len(points)
+                    elapsed = time.time() - start_time
+                    done = stats["indexed"]
+                    processable = total_pdfs - len(indexed_hashes)
+                    if done > 0 and processable > 0:
+                        rate = done / (elapsed / 60)
+                        remaining = processable - done
+                        eta_min = remaining / rate if rate > 0 else 0
+                        eta_str = f"{eta_min/60:.1f}h" if eta_min > 90 else f"{eta_min:.0f}min"
+                        print(f"  ✅ Done: {file_path.name} ({len(points)} chunks) | {done}/{processable} files | ETA ~{eta_str}")
+                    else:
+                        print(f"  ✅ Done: {file_path.name} ({len(points)} chunks)")
             
             except Exception as e:
                 pass # print(f"CRITICAL ERROR processing {file_path}: {e}", file=sys.stderr)
