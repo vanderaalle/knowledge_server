@@ -689,12 +689,14 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                 ocr_tag = " [OCR]" if res.get("used_ocr") else ""
                 print(f"⏳ Embedding: {file_path.name} ({len(chunks)} chunks){ocr_tag}")
 
+                FLUSH_EVERY = 100  # write to Qdrant every N chunks
                 points = []
+                book_vectors = 0
                 for chunk in chunks:
                     try:
                         # Truncate to safe length (more aggressive to avoid context limits)
-                        text_to_embed = chunk.text[:700].strip() 
-                        
+                        text_to_embed = chunk.text[:700].strip()
+
                         if not text_to_embed:
                              continue
 
@@ -703,29 +705,38 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                         except Exception as ollama_err:
                             pass # print(f"  ❌ Ollama Error for {file_path.name}: {ollama_err} (Prompt len: {len(text_to_embed)}, Model: {OLLAMA_MODEL})", file=sys.stderr)
                             continue
-                            
+
                         embedding = response["embedding"]
-                        
+
                         point_id = hashlib.md5(
                             (res["file_path"] + str(chunk.chunk_index)).encode()
                         ).hexdigest()
-                        
+
                         point = PointStruct(
                             id=point_id,
                             vector=embedding,
                             payload={
-                                "text": text_to_embed, 
+                                "text": text_to_embed,
                                 "metadata": chunk.to_metadata()
                             }
                         )
                         points.append(point)
+
+                        if len(points) >= FLUSH_EVERY:
+                            db.upsert_points(points)
+                            book_vectors += len(points)
+                            points = []
+
                     except Exception as e:
                         pass # print(f"  ⚠️  Embedding error {file_path.name}: {e}", file=sys.stderr)
-                
+
                 if points:
                     db.upsert_points(points)
+                    book_vectors += len(points)
+
+                if book_vectors:
                     stats["indexed"] += 1
-                    total_vectors += len(points)
+                    total_vectors += book_vectors
                     elapsed = time.time() - start_time
                     done = stats["indexed"]
                     processable = total_pdfs - len(indexed_hashes)
@@ -734,9 +745,9 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                         remaining = processable - done
                         eta_min = remaining / rate if rate > 0 else 0
                         eta_str = f"{eta_min/60:.1f}h" if eta_min > 90 else f"{eta_min:.0f}min"
-                        print(f"  ✅ Done: {file_path.name} ({len(points)} chunks) | {done}/{processable} files | ETA ~{eta_str}")
+                        print(f"  ✅ Done: {file_path.name} ({book_vectors} chunks) | {done}/{processable} files | ETA ~{eta_str}")
                     else:
-                        print(f"  ✅ Done: {file_path.name} ({len(points)} chunks)")
+                        print(f"  ✅ Done: {file_path.name} ({book_vectors} chunks)")
             
             except Exception as e:
                 pass # print(f"CRITICAL ERROR processing {file_path}: {e}", file=sys.stderr)
