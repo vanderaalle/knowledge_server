@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 """
-Knowledge Base MCP Server - OPTIMIZED VERSION
-Multi-threaded initialization & Fast PDF processing with PyMuPDF (fitz)
-
-Features:
-- Parallel Processing (using ThreadPoolExecutor/ProcessPoolExecutor)
-- Fast PDF Text Extraction via PyMuPDF (10x faster than pypdf)
-- Intelligent Batching for Embedding Requests
+Knowledge Base MCP Server
+Multi-threaded PDF indexing, vector search, and Anna's Archive integration.
 """
 
 import os
@@ -14,656 +9,101 @@ import sys
 import re
 
 # Suppress MuPDF noise (cmsOpenProfileFromMem, appearance stream errors).
-# Covers both C-level fd 2 and Python-level sys.stderr (used by PyMuPDF in Jupyter).
-# Our own messages use print() → stdout, so this is safe.
+# Must happen before pdf_processor is imported (which imports fitz).
 _devnull_fd = os.open(os.devnull, os.O_WRONLY)
 os.dup2(_devnull_fd, 2)
 os.close(_devnull_fd)
 del _devnull_fd
 sys.stderr = open(os.devnull, 'w')
+
 import time
 import hashlib
-import asyncio
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, Set
-from dataclasses import dataclass
 import concurrent.futures
 import platform
 import shutil
-
-# Fast PDF Library
-try:
-    import fitz  # PyMuPDF
-except ImportError:
-    pass # print("PyMuPDF (fitz) not found. Installing...", file=sys.stderr)
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pymupdf"])
-    import fitz
-
-fitz.TOOLS.mupdf_display_errors(False)
-
-# Fallback for OCR or specific metadata needs
-from pypdf import PdfReader
-from pdf2image import convert_from_path
-import pytesseract
-from PIL import Image
-
-# OCR Configuration
-TESSERACT_CMD = os.getenv('TESSERACT_CMD', '/opt/homebrew/bin/tesseract')
-_poppler_default = '/opt/homebrew/bin'
-POPPLER_PATH = os.getenv('POPPLER_PATH', _poppler_default if os.path.exists(_poppler_default) else None)
-if os.path.exists(TESSERACT_CMD):
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+from pathlib import Path
+from typing import List
 
 import logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 import ollama
-from qdrant_client import QdrantClient
-from qdrant_client.models import VectorParams, Distance, PointStruct
-from qdrant_client.http import models
+from qdrant_client.models import PointStruct
 from mcp.server.fastmcp import FastMCP
 from tqdm import tqdm
 import requests
 from bs4 import BeautifulSoup
-import shutil
+
+from pdf_processor import (
+    TextChunk, PDFProcessor,
+    _process_single_pdf, _worker_init,
+    MAX_WORKERS
+)
+from vector_db import VectorDBClient, get_db, OLLAMA_MODEL, COLLECTION_NAME
 
 
-# Configuration
-ANNAS_URL = "https://annas-archive.gl"
+# Anna's Archive configuration
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 ANNAS_URLS = ["https://annas-archive.gl", "https://annas-archive.se", "https://annas-archive.org", "https://annas-archive.li"]
 
+mcp = FastMCP("knowledge-server-optimized")
+
 
 def _get_annas_response(endpoint: str, params: dict = None, stream: bool = False):
-    """Tenta di ottenere una risposta da Anna's Archive provando diversi mirror."""
+    """Try each Anna's Archive mirror in order."""
     last_error = None
     for base_url in ANNAS_URLS:
         url = f"{base_url}{endpoint}"
         try:
-            # pass # print(f"[Annas] Provando mirror: {url}", file=sys.stderr)
             resp = requests.get(url, params=params, headers={'User-Agent': USER_AGENT}, timeout=10, stream=stream)
             resp.raise_for_status()
             return resp, base_url
         except Exception as e:
-            # pass # print(f"[Annas] Mirror fallito {url}: {e}", file=sys.stderr)
             last_error = e
             continue
     raise last_error
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'mxbai-embed-large')
-QDRANT_HOST = os.getenv('QDRANT_HOST', 'localhost')
-QDRANT_PORT = int(os.getenv('QDRANT_PORT', '6333'))
-COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'pdf_library')
-MAX_WORKERS = int(os.getenv('MAX_WORKERS', os.cpu_count() or 4))
-
-# Initialize FastMCP server
-mcp = FastMCP("knowledge-server-optimized")
-
-
-@dataclass
-class TextChunk:
-    """Chunk di testo semplificato - metadati essenziali"""
-    text: str
-    chunk_index: int
-    page_number: int
-    document_title: str
-    total_pages: int
-    source: str
-    source_path: str
-    file_hash: str
-    
-    def to_metadata(self) -> Dict[str, Any]:
-        return {
-            "chunk_index": self.chunk_index,
-            "page_number": self.page_number,
-            "document_title": self.document_title,
-            "total_pages": self.total_pages,
-            "source": self.source,
-            "source_path": self.source_path,
-            "file_hash": self.file_hash,
-        }
-
-
-class SimpleTextSplitter:
-    """Text splitter semplice e veloce"""
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.separators = ["\n\n", "\n", ". ", "! ", "? ", " ", ""]
-    
-    def split_text(self, text: str) -> List[str]:
-        """Split text into chunks"""
-        final_chunks = []
-        separator = ""
-        for sep in self.separators:
-            if sep == "" or sep in text:
-                separator = sep
-                break
-        
-        splits = text.split(separator) if separator else list(text)
-        current_chunk = []
-        current_length = 0
-        
-        for split in splits:
-            split_len = len(split)
-            if current_length + split_len + len(separator) > self.chunk_size:
-                if current_chunk:
-                    final_chunks.append(separator.join(current_chunk))
-                    # Overlap semplificato
-                    overlap_chunk = []
-                    overlap_len = 0
-                    for item in reversed(current_chunk):
-                        if overlap_len + len(item) + len(separator) <= self.chunk_overlap:
-                            overlap_chunk.insert(0, item)
-                            overlap_len += len(item) + len(separator)
-                        else:
-                            break
-                    current_chunk = overlap_chunk
-                    current_length = overlap_len
-            
-            current_chunk.append(split)
-            current_length += split_len + len(separator)
-        
-        if current_chunk:
-            final_chunks.append(separator.join(current_chunk))
-        
-        return final_chunks
-
-
-class PDFProcessor:
-    """Processore PDF - Versione Ottimizzata con PyMuPDF"""
-    
-    def __init__(self):
-        self.text_splitter = SimpleTextSplitter(chunk_size=800, chunk_overlap=150)
-    
-    def extract_text_from_pdf(self, pdf_path: str, use_ocr: bool = False) -> tuple:
-        """
-        Estrai testo da PDF usando PyMuPDF (molto più veloce).
-        
-        Args:
-            pdf_path: Percorso PDF
-            use_ocr: Se True, usa OCR per pagine senza testo (lento, richiede pypdf/tesseract)
-        
-        Returns: (full_text, page_texts, total_pages, used_ocr)
-        """
-        try:
-            doc = fitz.open(pdf_path)
-            total_pages = len(doc)
-            page_texts = []
-            full_text = ""
-            used_ocr = False
-
-            # --- Fast Path: PyMuPDF ---
-            for content in doc:
-                text = content.get_text()
-                page_texts.append(text)
-                full_text += text + "\n"
-            doc.close()
-            
-            # --- Slow Path: OCR Fallback ---
-            # Se il testo è vuoto e OCR è richiesto, usiamo il vecchio metodo (lento)
-            if not full_text.strip() and use_ocr:
-                try:
-                    reader = PdfReader(pdf_path)
-                    page_texts = []
-                    full_text = ""
-                    for i, page in enumerate(reader.pages):
-                        page_text = page.extract_text() or ""
-                        if not page_text.strip():
-                            try:
-                                images = convert_from_path(pdf_path, first_page=i+1, last_page=i+1, poppler_path=POPPLER_PATH)
-                                if images:
-                                    page_text = pytesseract.image_to_string(images[0])
-                                    used_ocr = True
-                            except:
-                                page_text = ""
-                        page_texts.append(page_text)
-                        full_text += page_text + "\n"
-                except Exception as e:
-                    pass
-            
-            return full_text, page_texts, total_pages, used_ocr
-            
-        except Exception as e:
-            pass # print(f"Error extracting text from {pdf_path}: {e}", file=sys.stderr)
-            return "", [], 0, False
-    
-    def extract_document_title(self, pdf_path: str, first_page_text: str) -> str:
-        """Estrai titolo dal PDF (ottimizzato)."""
-        try:
-            doc = fitz.open(pdf_path)
-            title = doc.metadata.get('title', '')
-            doc.close()
-            
-            if title:
-                return str(title)
-        except:
-            pass
-        
-        # Prova prime righe
-        lines = first_page_text.strip().split('\n')
-        for line in lines[:5]:
-            line = line.strip()
-            if line and len(line) > 3 and len(line) < 200:
-                if not re.match(r'^[\d\s\.]+$', line):
-                    return line
-        
-        # Fallback a nome file
-        return Path(pdf_path).stem.replace('_', ' ').replace('-', ' ').title()
-    
-    def chunk_text(self, text: str, page_texts: List[str], total_pages: int, 
-                   base_metadata: Dict[str, Any]) -> List[TextChunk]:
-        """Crea chunk con metadati essenziali (logica identica per compatibilità)"""
-        chunks = self.text_splitter.split_text(text)
-        chunk_objects = []
-        
-        # Calcola boundaries pagine
-        page_boundaries = []
-        char_count = 0
-        for page_text in page_texts:
-            page_boundaries.append((char_count, char_count + len(page_text)))
-            char_count += len(page_text) + 1
-        
-        document_title = base_metadata.get('document_title', 'Unknown')
-        text_pos = 0
-        
-        for i, chunk_text in enumerate(chunks):
-            # Cerca la posizione approssimativa del chunk nel testo completo
-            # (non perfetto se ci sono ripetizioni, ma veloce e sufficiente)
-            chunk_start = text.find(chunk_text, text_pos)
-            
-            # Trova pagina di appartenenza
-            page_number = 1
-            if chunk_start != -1:
-                # Se trovato, aggiorna la posizione per la prossima ricerca
-                text_pos = chunk_start + 1
-                for page_idx, (start, end) in enumerate(page_boundaries):
-                    if chunk_start >= start and chunk_start < end:
-                        page_number = page_idx + 1
-                        break
-            else:
-                 # Se non trovato (strano), resetta o stima
-                pass
-
-            
-            chunk_obj = TextChunk(
-                text=chunk_text,
-                chunk_index=i,
-                page_number=page_number,
-                document_title=document_title,
-                total_pages=total_pages,
-                source=base_metadata.get('source', ''),
-                source_path=base_metadata.get('source_path', ''),
-                file_hash=base_metadata.get('file_hash', '')
-            )
-            
-            chunk_objects.append(chunk_obj)
-        
-        return chunk_objects
-
-
-class VectorDBClient:
-    """Client Qdrant - Singleton-ish"""
-    
-    def __init__(self, host: str = QDRANT_HOST, port: int = QDRANT_PORT):
-        self.client = QdrantClient(host=host, port=port)
-        self._ensure_collection_exists()
-    
-    def _ensure_collection_exists(self):
-        """Crea collection se non esiste"""
-        try:
-            collections = self.client.get_collections().collections
-            collection_names = [c.name for c in collections]
-            
-            if COLLECTION_NAME not in collection_names:
-                # Dummy embedding request just to get size
-                try:
-                    test_embedding = ollama.embeddings(model=OLLAMA_MODEL, prompt="test")["embedding"]
-                    vector_size = len(test_embedding)
-                    
-                    self.client.create_collection(
-                        collection_name=COLLECTION_NAME,
-                        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
-                    )
-                    pass # print(f"Created collection '{COLLECTION_NAME}'", file=sys.stderr)
-                except Exception as e:
-                     pass # print(f"Error checking model embedding size: {e}. Is Ollama running?", file=sys.stderr)
-
-        except Exception as e:
-            pass # print(f"Error creating/checking collection: {e}", file=sys.stderr)
-    
-    def upsert_points(self, points: List[PointStruct]):
-        """Inserisci o aggiorna punti"""
-        try:
-            self.client.upsert(collection_name=COLLECTION_NAME, points=points)
-        except Exception as e:
-            pass # print(f"Error upserting points: {e}", file=sys.stderr)
-
-    def get_all_indexed_hashes(self) -> Set[str]:
-        """Load all indexed file hashes in one shot."""
-        hashes = set()
-        try:
-            offset = None
-            while True:
-                result, next_offset = self.client.scroll(
-                    collection_name=COLLECTION_NAME,
-                    limit=1000,
-                    offset=offset,
-                    with_payload=["metadata.file_hash"],
-                    with_vectors=False
-                )
-                for point in result:
-                    h = (point.payload or {}).get("metadata", {}).get("file_hash")
-                    if h:
-                        hashes.add(h)
-                if next_offset is None:
-                    break
-                offset = next_offset
-        except:
-            pass
-        return hashes
-
-    def is_file_indexed(self, file_hash: str) -> bool:
-        """Controlla se file già indicizzato"""
-        try:
-            result = self.client.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter=models.Filter(
-                    must=[models.FieldCondition(
-                        key="metadata.file_hash",
-                        match=models.MatchValue(value=file_hash)
-                    )]
-                ),
-                limit=1,
-                with_payload=False,
-                with_vectors=False
-            )
-            return len(result[0]) > 0
-        except:
-            return False
-    
-    def search(self, query_vector: List[float], limit: int = 5) -> List[Dict[str, Any]]:
-        """Cerca vettori simili"""
-        try:
-            search_result = self.client.search(
-                collection_name=COLLECTION_NAME,
-                query_vector=query_vector,
-                limit=limit
-            )
-            
-            results = []
-            for result in search_result:
-                results.append({
-                    "text": result.payload.get("text", ""),
-                    "metadata": result.payload.get("metadata", {}),
-                    "score": result.score
-                })
-            return results
-        except Exception as e:
-            pass # print(f"Error searching: {e}", file=sys.stderr)
-            return []
-    
-    def get_chunks_by_file(self, file_hash: str) -> List[Dict[str, Any]]:
-        """Recupera tutti i chunk di un file"""
-        try:
-            all_chunks = []
-            offset = None
-            
-            while True:
-                result = self.client.scroll(
-                    collection_name=COLLECTION_NAME,
-                    scroll_filter=models.Filter(
-                        must=[models.FieldCondition(
-                            key="metadata.file_hash",
-                            match=models.MatchValue(value=file_hash)
-                        )]
-                    ),
-                    limit=100,
-                    offset=offset,
-                    with_payload=True,
-                    with_vectors=False
-                )
-                
-                chunks, next_offset = result
-                for chunk in chunks:
-                    all_chunks.append({
-                        "text": chunk.payload.get("text", ""),
-                        "metadata": chunk.payload.get("metadata", {})
-                    })
-                
-                if not next_offset:
-                    break
-                offset = next_offset
-            
-            # Ordina per chunk_index
-            all_chunks.sort(key=lambda x: x["metadata"].get("chunk_index", 0))
-            return all_chunks
-        except Exception as e:
-            pass # print(f"Error getting chunks: {e}", file=sys.stderr)
-            return []
-
-    def get_head_chunks_by_file(self, file_hash: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """Recupera solo i primi chunks (per classificazione veloce)"""
-        try:
-            # Filtra per file_hash E ordina per chunk_index? 
-            # Scroll non garantisce ordine, ma se chiediamo limit basso è veloce.
-            # Meglio prendere un po' di chunks e ordinarli.
-            
-            result, _ = self.client.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter=models.Filter(
-                    must=[models.FieldCondition(
-                        key="metadata.file_hash",
-                        match=models.MatchValue(value=file_hash)
-                    )]
-                ),
-                limit=limit * 2, # Ne prendiamo di più per sicurezza
-                with_payload=True,
-                with_vectors=False
-            )
-            
-            msg_chunks = []
-            for chunk in result:
-                msg_chunks.append({
-                    "text": chunk.payload.get("text", ""),
-                    "metadata": chunk.payload.get("metadata", {})
-                })
-            
-            # Ordina e prendi i primi 'limit'
-            msg_chunks.sort(key=lambda x: x["metadata"].get("chunk_index", 0))
-            return msg_chunks[:limit]
-            
-        except Exception as e:
-            pass # print(f"Error getting head chunks: {e}", file=sys.stderr)
-            return []
-    
-    def delete_collection(self):
-        """Cancella collection intera"""
-        try:
-            self.client.delete_collection(collection_name=COLLECTION_NAME)
-            pass # print(f"Deleted collection '{COLLECTION_NAME}'", file=sys.stderr)
-            self._ensure_collection_exists()
-            return True
-        except Exception as e:
-            pass # print(f"Error deleting collection: {e}", file=sys.stderr)
-            return False
-
-
-def _suppress_stderr():
-    """Redirect fd 2 to /dev/null to silence MuPDF C-level noise."""
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
-    os.dup2(devnull_fd, 2)
-    os.close(devnull_fd)
-
-def _worker_init():
-    _suppress_stderr()
-
-# Inizializza globali
-pdf_processor = PDFProcessor()
-# Lazy init di vector_db per evitare problemi di connessione all'avvio se non serve
-vector_db = None
-
-def get_db():
-    global vector_db
-    if vector_db is None:
-        vector_db = VectorDBClient()
-    return vector_db
-
-
-def _calculate_file_hash(file_path: Path) -> str:
-    """Calcola hash MD5 file (veloce)"""
-    hash_md5 = hashlib.md5()
-    try:
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-    except Exception as e:
-        pass # print(f"Error hashing {file_path}: {e}", file=sys.stderr)
-        return ""
-
-
-def _process_single_pdf(args):
-    """
-    Funzione eseguita nel ProcessPool/ThreadPool.
-    Prende un file path, estrae testo, calcola hash.
-    NON fa chiamate al DB o a Ollama qui per evitare overhead di pickling connessioni.
-    Ritorna dict con dati pronti per embedding.
-    """
-    file_path, directory_path, use_ocr, indexed_hashes = args
-    result = {
-        "status": "error",
-        "file_path": str(file_path),
-        "file_hash": "",
-        "chunks": [],
-        "skip_reason": None
-    }
-
-    try:
-        # 1. Calc Hash — bail out early if already indexed
-        current_hash = _calculate_file_hash(file_path)
-        result["file_hash"] = current_hash
-        if current_hash in indexed_hashes:
-            result["status"] = "already_indexed"
-            return result
-
-        # 2. Extract Text
-        text, page_texts, total_pages, used_ocr = pdf_processor.extract_text_from_pdf(
-            str(file_path), use_ocr=use_ocr
-        )
-        
-        result["used_ocr"] = used_ocr
-        if used_ocr and not use_ocr:
-            result["status"] = "skipped_ocr"
-            return result
-            
-        if not text.strip():
-            result["status"] = "error_no_text"
-            return result
-        
-        # 3. Metadata & Chunking
-        document_title = pdf_processor.extract_document_title(str(file_path), text)
-        relative_path = os.path.relpath(file_path, directory_path)
-        
-        base_metadata = {
-            "source": relative_path,
-            "source_path": str(file_path),
-            "file_hash": current_hash,
-            "document_title": document_title
-        }
-        
-        chunks = pdf_processor.chunk_text(text, page_texts, total_pages, base_metadata)
-        
-        result["chunks"] = chunks
-        result["status"] = "ok"
-        return result
-        
-    except Exception as e:
-        result["error_message"] = str(e)
-        return result
 
 
 def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_all: bool = False, file_list: list = None) -> tuple:
     """
-    Indicizza directory o lista di file in PARALLELO.
+    Core indexing function. Parses PDFs in parallel (ProcessPool), then
+    embeds and upserts in the main thread with incremental Qdrant writes.
+    Returns (indexed, skipped, errors, ocr_skipped).
     """
-    if file_list:
-        all_pdfs = [Path(p) for p in file_list if Path(p).exists()]
-        directory_path = "Custom File List"
-    else:
-        path_obj = Path(directory_path)
-        if not path_obj.exists():
-            raise ValueError(f"Path {directory_path} does not exist")
-    
     db = get_db()
-    
+
     if delete_all:
         db.delete_collection()
-    
-    # 1. Scan directory or file
-    pass # print(f"📁 Scanning: {directory_path}", file=sys.stderr)
-    
-    if not file_list:
-        if path_obj.is_file():
-            if path_obj.suffix.lower() == '.pdf':
-                all_pdfs = [path_obj]
-            else:
-                 pass # print("❌ File is not a PDF", file=sys.stderr)
-                 return 0, 0, 0, 0
-        else:
-            all_pdfs = list(path_obj.rglob("*.pdf"))
+
+    if file_list:
+        all_pdfs = [Path(p) for p in file_list if Path(p).exists()]
+        directory_path = directory_path or str(Path(file_list[0]).parent)
+    elif directory_path:
+        all_pdfs = list(Path(directory_path).rglob("*.pdf"))
+    else:
+        return 0, 0, 0, 0
 
     total_pdfs = len(all_pdfs)
-    
     if total_pdfs == 0:
         return 0, 0, 0, 0
-    
-    # 2. Filter indexed files (Batch checking is better if API supports it, but simple loop is fast for DB read)
-    # Per speed: get all hashes from DB? No, too many. Check individually but fast.
-    # Optimization: Check hash AFTER processing? No, check BEFORE to save CPU.
-    # But hash calc takes time. 
-    # Strategy: Compute hash in main thread or parallel? 
-    # Parallelize everything: Hash check inside worker? No, worker doesn't have DB access.
-    # Better: 
-    # Phase A: Collect all files.
-    # Phase B: Parallel Hash + Extract + Chunk.
-    # Phase C: Main thread checks DB (hash already computed) -> if exists allow skip.
-    # Phase D: Embedding + Upsert (Parallel).
-    
-    # Load all known hashes upfront — one DB call instead of one per file
+
     indexed_hashes = db.get_all_indexed_hashes()
 
-    stats = {
-        "indexed": 0,
-        "skipped": 0,
-        "errors": 0,
-        "ocr_skipped": 0
-    }
+    stats = {"indexed": 0, "skipped": 0, "errors": 0, "ocr_skipped": 0}
     start_time = time.time()
     total_vectors = 0
-    
-    # Prepare args for workers
+
     worker_args = [(p, directory_path, use_ocr, indexed_hashes) for p in all_pdfs]
-    
-    # Using ThreadPool is easier for IO bound (Ollama), but Parsing is CPU bound.
-    # Hybrid approach:
-    # 1. ProcessPool for Parsing (CPU)
-    # 2. ThreadPool for Embeddings (Network/GPU wait)
-    
-    # Since we can't easily share the huge QdrantClient/OllamaClient across processes,
-    # We use ProcessPool to generate Chunks, then Main thread (or ThreadPool) to Embed & Upsert.
-    
+
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, initializer=_worker_init) as executor:
-        # Submit all parsing jobs
-        # Use tqdm for progress
         futures = {executor.submit(_process_single_pdf, arg): arg[0] for arg in worker_args}
-        
+
         for future in tqdm(concurrent.futures.as_completed(futures), total=total_pdfs, desc="Parsing PDFs", unit="file"):
             file_path = futures[future]
             try:
                 res = future.result()
-                
+
                 if res["status"] == "already_indexed":
                     stats["skipped"] += 1
                     continue
@@ -681,54 +121,44 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                     print(f"⚠️  No text: {file_path.name}")
                     stats["errors"] += 1
                     continue
-                
-                # Now we have chunks ready for embedding.
-                # Do this in current thread (or another ThreadPool if we want to pipeline parsing/embedding)
-                # For simplicity, do it here. Ollama is likely the bottleneck.
+
                 chunks: List[TextChunk] = res["chunks"]
                 ocr_tag = " [OCR]" if res.get("used_ocr") else ""
                 print(f"⏳ Embedding: {file_path.name} ({len(chunks)} chunks){ocr_tag}")
 
-                FLUSH_EVERY = 100  # write to Qdrant every N chunks
+                FLUSH_EVERY = 100
                 points = []
                 book_vectors = 0
+
                 for chunk in chunks:
                     try:
-                        # Truncate to safe length (more aggressive to avoid context limits)
                         text_to_embed = chunk.text[:700].strip()
-
                         if not text_to_embed:
-                             continue
+                            continue
 
                         try:
                             response = ollama.embeddings(model=OLLAMA_MODEL, prompt=text_to_embed)
-                        except Exception as ollama_err:
-                            pass # print(f"  ❌ Ollama Error for {file_path.name}: {ollama_err} (Prompt len: {len(text_to_embed)}, Model: {OLLAMA_MODEL})", file=sys.stderr)
+                        except Exception:
                             continue
 
                         embedding = response["embedding"]
-
                         point_id = hashlib.md5(
                             (res["file_path"] + str(chunk.chunk_index)).encode()
                         ).hexdigest()
 
-                        point = PointStruct(
+                        points.append(PointStruct(
                             id=point_id,
                             vector=embedding,
-                            payload={
-                                "text": text_to_embed,
-                                "metadata": chunk.to_metadata()
-                            }
-                        )
-                        points.append(point)
+                            payload={"text": text_to_embed, "metadata": chunk.to_metadata()}
+                        ))
 
                         if len(points) >= FLUSH_EVERY:
                             db.upsert_points(points)
                             book_vectors += len(points)
                             points = []
 
-                    except Exception as e:
-                        pass # print(f"  ⚠️  Embedding error {file_path.name}: {e}", file=sys.stderr)
+                    except Exception:
+                        pass
 
                 if points:
                     db.upsert_points(points)
@@ -748,25 +178,26 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                         print(f"  ✅ Done: {file_path.name} ({book_vectors} chunks) | {done}/{processable} files | ETA ~{eta_str}")
                     else:
                         print(f"  ✅ Done: {file_path.name} ({book_vectors} chunks)")
-            
-            except Exception as e:
-                pass # print(f"CRITICAL ERROR processing {file_path}: {e}", file=sys.stderr)
+
+            except Exception:
                 stats["errors"] += 1
-    
+
     return stats["indexed"], stats["skipped"], stats["errors"], stats["ocr_skipped"]
 
+
+# ---------------------------------------------------------------------------
+# MCP Tools
+# ---------------------------------------------------------------------------
 
 @mcp.tool()
 def index_library(path: str, delete_all: bool = False) -> str:
     """Indicizza PDF in parallelo e velocemente."""
     if not path:
         return "❌ Path richiesto"
-    
     try:
         indexed, skipped, errors, ocr_skip = _index_directory(path, use_ocr=False, delete_all=delete_all)
-        
         result = f"""✅ Indicizzazione ottimizzata completata!
-        
+
 📊 Risultati:
 • PDF indicizzati: {indexed}
 • Già presenti: {skipped}
@@ -775,68 +206,25 @@ def index_library(path: str, delete_all: bool = False) -> str:
 """
         if ocr_skip > 0:
             result += f"\n💡 Tip: {ocr_skip} PDF richiedono OCR (usa index_with_ocr)."
-        
         return result
-        
     except Exception as e:
         import traceback
-        return f"❌ Errore critico: {str(e)}\n{traceback.format_exc()}"
+        return f"❌ Errore: {str(e)}\n{traceback.format_exc()}"
 
 
 @mcp.tool()
 def index_single_pdf(file_path: str) -> str:
-    """Indicizza un singolo PDF (veloce, per file specifici)."""
-    from pathlib import Path
-    
+    """Indicizza un singolo PDF (con OCR se necessario)."""
+    if not file_path:
+        return "❌ Path richiesto"
     try:
-        pdf_path = Path(file_path)
-        if not pdf_path.exists():
-            return f"❌ File non trovato: {file_path}"
-        
-        db = get_db()
-        
-        # Calcola hash
-        file_hash = _calculate_file_hash(pdf_path)
-        if db.is_file_indexed(file_hash):
-            return "⏭️ File già indicizzato"
-        
-        # Processa PDF
-        result = pdf_processor.process_pdf(str(pdf_path))
-        if result['error']:
-            return f"❌ Errore nel processamento: {result['error']}"
-        
-        if not result['chunks']:
-            return "❌ Nessun testo estratto dal PDF"
-        
-        # Genera embeddings e salva
-        points = []
-        total_chunks = len(result['chunks'])
-        
-        for i, chunk in enumerate(result['chunks']):
-            try:
-                response = ollama.embeddings(model=OLLAMA_MODEL, prompt=chunk.text)
-                embedding = response['embedding']
-                
-                point_id = hashlib.md5((result['file_path'] + str(chunk.chunk_index)).encode()).hexdigest()
-                
-                point = PointStruct(
-                    id=point_id,
-                    vector=embedding,
-                    payload={
-                        "text": chunk.text,
-                        "metadata": chunk.to_metadata()
-                    }
-                )
-                points.append(point)
-            except Exception as e:
-                pass  # Skip embedding errors for individual chunks
-        
-        if points:
-            db.upsert_points(points)
-            return f"✅ Indicizzato: {pdf_path.name}\n• Chunks: {len(points)}/{total_chunks}\n• Pagine: {result['chunks'][0].total_pages if result['chunks'] else 'N/A'}"
-        else:
-            return "❌ Nessun chunk valido da indicizzare"
-            
+        indexed, skipped, errors, ocr_skip = _index_directory(file_list=[file_path], use_ocr=True)
+        if skipped > 0:
+            return f"⏭️  Already indexed: {file_path}"
+        if indexed > 0:
+            ocr_note = " (OCR)" if ocr_skip == 0 else ""
+            return f"✅ Indexed{ocr_note}: {file_path}"
+        return f"⚠️  No text extracted from: {file_path}"
     except Exception as e:
         import traceback
         return f"❌ Errore: {str(e)}\n{traceback.format_exc()}"
@@ -845,7 +233,8 @@ def index_single_pdf(file_path: str) -> str:
 @mcp.tool()
 def index_with_ocr(path: str) -> str:
     """Indicizza con OCR (Lento ma accurato per scansioni)."""
-    if not path: return "❌ Path richiesto"
+    if not path:
+        return "❌ Path richiesto"
     try:
         indexed, skipped, errors, _ = _index_directory(path, use_ocr=True, delete_all=False)
         return f"✅ OCR Completato. Indicizzati: {indexed}, Saltati: {skipped}, Errori: {errors}"
@@ -853,20 +242,17 @@ def index_with_ocr(path: str) -> str:
         return f"❌ Errore: {str(e)}"
 
 
-# --- Tools inviariati (Query, Read, Info, etc.) ---
-# Per brevità riutilizziamo la logica, ma dobbiamo riesporli come tool MCP.
-
 @mcp.tool()
 def query_library(query: str, n_results: int = 5) -> str:
     """Cerca nella knowledge base."""
-    if not query: return "❌ Query richiesta"
+    if not query:
+        return "❌ Query richiesta"
     db = get_db()
     try:
         response = ollama.embeddings(model=OLLAMA_MODEL, prompt=query)
         results = db.search(response["embedding"], limit=n_results)
-        
-        if not results: return "Nessun risultato."
-        
+        if not results:
+            return "Nessun risultato."
         formatted = []
         for i, result in enumerate(results, 1):
             meta = result['metadata']
@@ -878,7 +264,9 @@ def query_library(query: str, n_results: int = 5) -> str:
                 f"   {result['text'][:300]}...\n"
             )
         return "\n".join(formatted)
-    except Exception as e: return f"❌ Errore: {str(e)}"
+    except Exception as e:
+        return f"❌ Errore: {str(e)}"
+
 
 @mcp.tool()
 def get_document_info(file_hash: str) -> str:
@@ -886,10 +274,13 @@ def get_document_info(file_hash: str) -> str:
     db = get_db()
     try:
         chunks = db.get_chunks_by_file(file_hash)
-        if not chunks: return "❌ Documento non trovato"
+        if not chunks:
+            return "❌ Documento non trovato"
         meta = chunks[0]["metadata"]
         return f"📚 {meta.get('document_title','Unknown')}\nFile: {meta.get('source')}\nPagine: {meta.get('total_pages')}\nChunks: {len(chunks)}"
-    except Exception as e: return f"Error: {e}"
+    except Exception as e:
+        return f"Error: {e}"
+
 
 @mcp.tool()
 def read_page(file_hash: str, page_number: int) -> str:
@@ -898,9 +289,12 @@ def read_page(file_hash: str, page_number: int) -> str:
     try:
         chunks = db.get_chunks_by_file(file_hash)
         page_chunks = [c for c in chunks if c["metadata"].get("page_number") == page_number]
-        if not page_chunks: return "Pagina non trovata"
+        if not page_chunks:
+            return "Pagina non trovata"
         return "\n\n".join([c["text"] for c in page_chunks])
-    except Exception as e: return str(e)
+    except Exception as e:
+        return str(e)
+
 
 @mcp.tool()
 def reconstruct_document(file_hash: str) -> str:
@@ -909,10 +303,8 @@ def reconstruct_document(file_hash: str) -> str:
     try:
         chunks = db.get_chunks_by_file(file_hash)
         return "\n\n".join([c["text"] for c in chunks])
-    except Exception as e: return str(e)
-
-
-
+    except Exception as e:
+        return str(e)
 
 
 @mcp.tool()
@@ -924,7 +316,6 @@ def open_pdf_page(file_path: str, page_number: int = 1) -> str:
     try:
         system = platform.system()
         if system == "Darwin":
-            # AppleScript: open in Preview and jump to page
             script = (
                 f'tell application "Preview" to open POSIX file "{file_path}"\n'
                 f'delay 1\n'
@@ -933,14 +324,12 @@ def open_pdf_page(file_path: str, page_number: int = 1) -> str:
             )
             subprocess.Popen(["osascript", "-e", script])
         elif system == "Windows":
-            # SumatraPDF supports -page; fall back to os.startfile
             sumatra = shutil.which("SumatraPDF")
             if sumatra:
                 subprocess.Popen([sumatra, "-page", str(page_number), file_path])
             else:
                 os.startfile(file_path)
         else:
-            # Linux: try evince, okular, zathura in order
             if shutil.which("evince"):
                 subprocess.Popen(["evince", f"--page-index={page_number - 1}", file_path])
             elif shutil.which("okular"):
@@ -962,7 +351,6 @@ def search_annas_archive(query: str, limit: int = 5, lang: str = '', ext: str = 
     Supporta ricerca semantica automatica se la query sembra naturale.
     Ritorna una lista di risultati con MD5 per il download.
     """
-    # 1. Semantic Expansion (Simple heuristic: > 3 words)
     search_query = query
     if len(query.split()) > 3:
         try:
@@ -970,21 +358,19 @@ def search_annas_archive(query: str, limit: int = 5, lang: str = '', ext: str = 
             response = ollama.generate(model="deepseek-r1:7b", prompt=prompt, stream=False)
             if 'response' in response:
                 keywords = response['response'].strip().replace('"', '')
-                # Clean reasoning tags if present
                 if "</think>" in keywords:
                     keywords = keywords.split("</think>")[-1].strip()
-                pass # print(f"[Annas] Semantic expansion: '{query}' -> '{keywords}'", file=sys.stderr)
                 search_query = keywords
-        except Exception as e:
-            pass # print(f"[Annas] Semantic error: {e}", file=sys.stderr)
+        except Exception:
+            pass
 
-    # 2. Search (VERSION V2.6 - FINAL INLINE)
     params = {'q': search_query}
-    if lang: params['lang'] = lang
-    if ext: params['ext'] = ext
-    
+    if lang:
+        params['lang'] = lang
+    if ext:
+        params['ext'] = ext
+
     try:
-        # Inline mirror logic to avoid NameError
         response = None
         current_url = None
         last_error = None
@@ -999,45 +385,35 @@ def search_annas_archive(query: str, limit: int = 5, lang: str = '', ext: str = 
             except Exception as e:
                 last_error = e
                 continue
-        
-        if not response: raise last_error
-        response.raise_for_status()
-        
+
+        if not response:
+            raise last_error
+
         soup = BeautifulSoup(response.content, 'html.parser')
-        
         results = []
         seen_md5s = set()
-        
+
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
             if '/md5/' in href:
                 md5 = href.split('/md5/')[1]
                 title = a_tag.get_text(separator=" ", strip=True)
-                
-                # Filter out empty titles (like the cover image link)
-                if not title or len(title) < 3: continue
-                
-                # Check if we already have this MD5
+                if not title or len(title) < 3:
+                    continue
                 if md5 not in seen_md5s:
                     seen_md5s.add(md5)
-                    
-                    # Extract more info from the container
                     container = a_tag.parent
                     full_text = container.get_text(separator=" | ", strip=True)
-                    
                     results.append(f"{len(results)+1}. {title}\n   MD5: {md5}\n   Info: {full_text[:150]}...")
-                
-                if len(results) >= limit: break
-        
+                if len(results) >= limit:
+                    break
+
         if not results:
             return f"❌ Nessun risultato trovato per '{search_query}'."
-            
+
         return f"V2.1 - {len(results)} risultati\n\n" + "\n\n".join(results) + "\n\n💡 Usa 'download_from_annas_archive(md5)' per scaricare."
 
     except Exception as e:
-        import traceback
-        error_msg = traceback.format_exc()
-        # print(f"❌ Errore ricerca: {e}\n{error_msg}", file=sys.stderr)
         return f"❌ Errore ricerca: {e}"
 
 
@@ -1049,7 +425,6 @@ def download_from_annas_archive(md5: str) -> str:
     Tenta download automatico da IPFS/Libgen, altrimenti ritorna link manuali.
     """
     try:
-        # Inline mirror logic to avoid NameError
         response = None
         current_url = None
         last_error = None
@@ -1064,47 +439,38 @@ def download_from_annas_archive(md5: str) -> str:
             except Exception as e:
                 last_error = e
                 continue
-        
-        if not response: raise last_error
+
+        if not response:
+            raise last_error
+
         output_dir = "alias_books/"
         os.makedirs(output_dir, exist_ok=True)
-        
-        response.raise_for_status()
-        
+
         soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Improved title and author extraction
+
         title = ""
         author = ""
-        
         title_tag = soup.find('div', class_='text-3xl font-bold')
         if title_tag:
             title = title_tag.get_text(strip=True)
-            
         author_div = soup.find('div', class_='italic')
         if author_div:
-            # Try to get the first author link or all text
             author_tag = author_div.find('a')
             if author_tag:
                 author = author_tag.get_text(strip=True)
             else:
                 author = author_div.get_text(strip=True)
-        
-        # Fallback if extraction fails
-        if not title: title = f"Book_{md5}"
-        
-        # Construct sanitized filename
+
+        if not title:
+            title = f"Book_{md5}"
+
         full_name = f"{author} - {title}" if author else title
-        safe_name = re.sub(r'[\\/*?:"<>|]', "", full_name).strip()
-        # Remove trailing periods which can cause issues on some systems
-        safe_name = safe_name.rstrip('.')
-        
-        # Find links and try to guess extension
+        safe_name = re.sub(r'[\\/*?:"<>|]', "", full_name).strip().rstrip('.')
+
         ipfs_links = []
         libgen_links = []
         slow_links = []
-        detected_ext = "pdf" # Default fallback
-        
+
         for a in soup.find_all('a', href=True):
             href = a['href']
             if href.startswith('ipfs://'):
@@ -1115,42 +481,26 @@ def download_from_annas_archive(md5: str) -> str:
                 libgen_links.append(href)
             elif '/slow_download/' in href:
                 slow_links.append(f"{current_url}{href}")
-        
-        # Try automated download (IPFS preferred)
-        all_auto_links = ipfs_links + libgen_links
-        
-        for link in all_auto_links:
+
+        for link in ipfs_links + libgen_links:
             try:
-                pass # print(f"[Annas] Tenta download da: {link}", file=sys.stderr)
                 with requests.get(link, stream=True, timeout=20) as r:
                     r.raise_for_status()
                     content_type = r.headers.get('Content-Type', '').lower()
-                    
                     if 'application/pdf' in content_type:
-                        ext = 'pdf'
-                        filepath = os.path.join(output_dir, f"{safe_name}.{ext}")
-                        
-                        pass # print(f"[Annas] Start writing to {filepath}", file=sys.stderr)
+                        filepath = os.path.join(output_dir, f"{safe_name}.pdf")
                         with open(filepath, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
-                        pass # print(f"[Annas] Download finished: {filepath}", file=sys.stderr)
                         return f"✅ Download completato: {filepath}"
-                    else:
-                        pass # print(f"[Annas] Skipped non-PDF link ({content_type}) from {link}", file=sys.stderr)
-                        continue
-                
-            except Exception as e:
-                pass # print(f"[Annas] Error downloading {link}: {e}", file=sys.stderr)
+            except Exception:
                 continue
-                
-        # If automated failed, return links
+
         msg = f"❌ Download automatico fallito. Non sono stati trovati link diretti in formato PDF per '{full_name}'.\n\nEcco i link per il controllo manuale:\n"
         for link in slow_links[:3]:
             msg += f"🔗 Slow Server: {link}\n"
         for link in libgen_links[:1]:
             msg += f"🔗 Libgen: {link}\n"
-            
         return msg
 
     except Exception as e:
@@ -1160,7 +510,4 @@ def download_from_annas_archive(md5: str) -> str:
 
 
 if __name__ == "__main__":
-    pass # print("[DEBUG] Starting Optimized Knowledge Server...", file=sys.stderr)
     mcp.run()
-# Reload trigger: Sun Mar  8 18:40:21 CET 2026
-# Force Reload Sun Mar  8 21:18:34 CET 2026
