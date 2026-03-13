@@ -40,6 +40,8 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pymupdf"])
     import fitz
 
+fitz.TOOLS.mupdf_display_errors(False)
+
 # Fallback for OCR or specific metadata needs
 from pypdf import PdfReader
 from pdf2image import convert_from_path
