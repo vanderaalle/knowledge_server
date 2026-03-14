@@ -445,15 +445,13 @@ Steps 2–4 are safe to resume if interrupted — each one skips already-indexed
 
 ### Adding a new book
 
-Add the book to Calibre normally, then index just that file:
+Add the book to Calibre normally, then re-run the indexer on the whole library:
 
 ```python
-server.index_single_pdf("/home/youruser/Calibre Library/Author/Title (id)/file.pdf")
+server.index_library("/home/youruser/Calibre Library")
 ```
 
-This is fast (seconds to minutes) and leaves the rest of the database untouched.
-
-> **Do not run `index_library` for a single new book** — it will re-process all books that lack a stored hash, creating duplicates.
+Because every indexed file has a `file_hash` stored in Qdrant, `index_library` skips files it has already seen and only processes the new one. It's fast when most books are already indexed.
 
 ### Maintenance scripts
 
