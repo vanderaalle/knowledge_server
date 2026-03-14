@@ -139,23 +139,8 @@ def main():
         print(f"  → new title: {new_title[:70]}")
 
         # Update all chunks for this document
+        # Read each point's full payload and rewrite with updated title fields.
         point_ids = info["point_ids"]
-        try:
-            client.set_payload(
-                collection_name=COLLECTION,
-                payload={
-                    "metadata": {
-                        **{},  # We need to update nested field carefully
-                    }
-                },
-                points=point_ids,
-            )
-        except Exception:
-            pass
-
-        # Qdrant doesn't support nested key updates directly — update via overwrite per point
-        # We set payload keys at top level using a workaround: read each point and rewrite metadata
-        # Use batch scroll by IDs to get current payloads
         batch_size = 50
         for start in range(0, len(point_ids), batch_size):
             batch_ids = point_ids[start:start + batch_size]
