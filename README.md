@@ -413,3 +413,64 @@ A good pairing: use **Calibre** to manage your PDF library (organize, tag, conve
 
 Calibre keeps doing what it does best (library management, format conversion, metadata editing). The knowledge server adds a semantic layer on top, without touching or duplicating your files.
 
+---
+
+## Maintenance
+
+### Full re-index (clean slate)
+
+Do this when you want a fresh database — e.g. after a code update that changes the metadata format, or when the collection has accumulated stale/duplicate entries.
+
+**Takes several hours. Do it when you can leave the machine running overnight.**
+
+```python
+# In ks_sandbox.ipynb — run cells in order:
+
+# 1. Wipe the collection
+db = server.get_db()
+db.delete_collection()
+
+# 2. Re-index all text PDFs (no OCR)
+server.index_library("/home/youruser/Calibre Library")
+
+# 3. After step 2 finishes, run OCR on scanned books
+# (from terminal)
+python scripts/ocr_priority.py
+
+# 4. Fix/improve titles using the LLM
+python scripts/fix_titles.py
+```
+
+Steps 2–4 are safe to resume if interrupted — each one skips already-indexed files (by hash) or already-fixed titles.
+
+### Adding a new book
+
+Add the book to Calibre normally, then index just that file:
+
+```python
+server.index_single_pdf("/home/youruser/Calibre Library/Author/Title (id)/file.pdf")
+```
+
+This is fast (seconds to minutes) and leaves the rest of the database untouched.
+
+> **Do not run `index_library` for a single new book** — it will re-process all books that lack a stored hash, creating duplicates.
+
+### Maintenance scripts
+
+| Script | What it does |
+|--------|-------------|
+| `scripts/fix_titles.py` | Uses `llama3.2` to generate clean titles from first-page text and stores them in Qdrant |
+| `scripts/tag_no_text.py` | Scans Calibre library, tags image-only PDFs with "no-text" in Calibre |
+| `scripts/ocr_priority.py` | Runs Tesseract OCR on high-value "no-text" books and indexes them |
+| `scripts/sync_titles_to_calibre.py` | Pushes LLM-generated titles from Qdrant back to Calibre metadata |
+| `scripts/audit_calibre_coverage.py` | Shows which Calibre books are indexed in Qdrant (matched by file hash) |
+| `scripts/backfill_file_hash.py` | Backfills missing `file_hash` metadata on existing Qdrant chunks |
+
+### Checking index coverage
+
+```bash
+python scripts/audit_calibre_coverage.py
+```
+
+Shows how many Calibre books are indexed, how many are missing, and which ones need OCR.
+
