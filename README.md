@@ -533,6 +533,7 @@ Then run `index_library` to pick up any new/replacement files.
 | `scripts/audit_calibre_coverage.py` | Shows which Calibre books are indexed in Qdrant (matched by file hash) |
 | `scripts/backfill_file_hash.py` | Backfills missing `file_hash` metadata on existing Qdrant chunks |
 | `scripts/cleanup_orphans.py` | Removes Qdrant chunks whose source file no longer exists on disk |
+| `scripts/backfill_full_text.py` | Backfills full chunk text in Qdrant (fixes truncation from older index runs) |
 
 ### Checking index coverage
 
