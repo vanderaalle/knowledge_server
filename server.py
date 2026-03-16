@@ -374,8 +374,9 @@ def reconstruct_document(file_hash: str) -> str:
 
 
 @mcp.tool()
-def open_pdf_page(file_path: str, page_number: int = 1) -> str:
-    """Open a PDF or epub file at a specific page using the system viewer."""
+def open_pdf_page(file_path: str, page_number: int = 1, search_term: str = "") -> str:
+    """Open a PDF or epub file at a specific page using the system viewer.
+    For epubs, page_number is ignored; pass search_term to jump to the passage."""
     import subprocess
     if not os.path.exists(file_path):
         return f"❌ File not found: {file_path}"
@@ -384,12 +385,19 @@ def open_pdf_page(file_path: str, page_number: int = 1) -> str:
         system = platform.system()
 
         if is_epub:
-            # Calibre's ebook-viewer is the best cross-platform option for epubs
             if shutil.which("ebook-viewer"):
-                subprocess.Popen(["ebook-viewer", file_path])
+                cmd = ["ebook-viewer", file_path]
+                if search_term:
+                    cmd += [f"--open-at=search:{search_term}"]
+                subprocess.Popen(cmd)
             else:
                 subprocess.Popen(["xdg-open", file_path])
-            return f"✅ Opened {os.path.basename(file_path)} (use Ctrl+F to search for the passage)"
+            msg = f"✅ Opened {os.path.basename(file_path)}"
+            if search_term:
+                msg += f" — jumping to '{search_term}'"
+            else:
+                msg += " (use Ctrl+F to find the passage)"
+            return msg
 
         if system == "Darwin":
             script = (
