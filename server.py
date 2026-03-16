@@ -80,7 +80,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
         all_pdfs = [Path(p) for p in file_list if Path(p).exists()]
         directory_path = directory_path or str(Path(file_list[0]).parent)
     elif directory_path:
-        all_pdfs = list(Path(directory_path).rglob("*.pdf"))
+        all_pdfs = list(Path(directory_path).rglob("*.pdf")) + list(Path(directory_path).rglob("*.epub"))
     else:
         return 0, 0, 0, 0
 

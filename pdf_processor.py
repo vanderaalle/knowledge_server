@@ -18,6 +18,14 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pymupdf"])
     import fitz
 
+try:
+    import ebooklib
+    from ebooklib import epub
+    from bs4 import BeautifulSoup
+    EPUB_SUPPORT = True
+except ImportError:
+    EPUB_SUPPORT = False
+
 fitz.TOOLS.mupdf_display_errors(False)
 
 from pypdf import PdfReader
@@ -166,6 +174,28 @@ class PDFProcessor:
 
         return Path(pdf_path).stem.replace('_', ' ').replace('-', ' ').title()
 
+    def extract_text_from_epub(self, epub_path: str) -> tuple:
+        """Extract text from an epub file. Returns (full_text, page_texts, total_pages, used_ocr)."""
+        if not EPUB_SUPPORT:
+            return "", [], 0, False
+        try:
+            book = epub.read_epub(epub_path, options={"ignore_ncx": True})
+            chapters = [
+                item for item in book.get_items()
+                if item.get_type() == ebooklib.ITEM_DOCUMENT
+            ]
+            page_texts = []
+            full_text = ""
+            for chapter in chapters:
+                soup = BeautifulSoup(chapter.get_body_content(), "html.parser")
+                text = soup.get_text(separator="\n", strip=True)
+                if text.strip():
+                    page_texts.append(text)
+                    full_text += text + "\n\n"
+            return full_text, page_texts, len(page_texts), False
+        except Exception:
+            return "", [], 0, False
+
     def chunk_text(self, text: str, page_texts: List[str], total_pages: int,
                    base_metadata: Dict[str, Any]) -> List[TextChunk]:
         chunks = self.text_splitter.split_text(text)
@@ -254,9 +284,12 @@ def _process_single_pdf(args):
             result["status"] = "already_indexed"
             return result
 
-        text, page_texts, total_pages, used_ocr = pdf_processor.extract_text_from_pdf(
-            str(file_path), use_ocr=use_ocr
-        )
+        if file_path.suffix.lower() == ".epub":
+            text, page_texts, total_pages, used_ocr = pdf_processor.extract_text_from_epub(str(file_path))
+        else:
+            text, page_texts, total_pages, used_ocr = pdf_processor.extract_text_from_pdf(
+                str(file_path), use_ocr=use_ocr
+            )
 
         result["used_ocr"] = used_ocr
         if used_ocr and not use_ocr:
