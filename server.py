@@ -7,6 +7,7 @@ Multi-threaded PDF indexing, vector search, and Anna's Archive integration.
 import os
 import sys
 import re
+import json
 
 # Suppress MuPDF noise (cmsOpenProfileFromMem, appearance stream errors).
 # Must happen before pdf_processor is imported (which imports fitz).
@@ -49,6 +50,27 @@ ANNAS_URLS = ["https://annas-archive.gl", "https://annas-archive.se", "https://a
 
 mcp = FastMCP("knowledge-server-optimized")
 
+# Cache of file hashes known to have no extractable text — persisted to disk
+# so index_library skips them instantly on future runs without opening the file.
+_EMPTY_HASH_CACHE_PATH = os.path.expanduser("~/.local/share/knowledge_server/empty_hashes.json")
+
+def _load_empty_hashes() -> set:
+    try:
+        with open(_EMPTY_HASH_CACHE_PATH) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def _save_empty_hash(file_hash: str):
+    try:
+        os.makedirs(os.path.dirname(_EMPTY_HASH_CACHE_PATH), exist_ok=True)
+        hashes = _load_empty_hashes()
+        hashes.add(file_hash)
+        with open(_EMPTY_HASH_CACHE_PATH, "w") as f:
+            json.dump(list(hashes), f)
+    except Exception:
+        pass
+
 
 def _get_annas_response(endpoint: str, params: dict = None, stream: bool = False):
     """Try each Anna's Archive mirror in order."""
@@ -88,13 +110,15 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
     if total_pdfs == 0:
         return 0, 0, 0, 0
 
+    empty_hashes = _load_empty_hashes()
+
     indexed_hashes = db.get_all_indexed_hashes()
 
     stats = {"indexed": 0, "skipped": 0, "errors": 0, "ocr_skipped": 0}
     start_time = time.time()
     total_vectors = 0
 
-    worker_args = [(p, directory_path, use_ocr, indexed_hashes) for p in all_pdfs]
+    worker_args = [(p, directory_path, use_ocr, indexed_hashes, empty_hashes) for p in all_pdfs]
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, initializer=_worker_init) as executor:
         futures = {executor.submit(_process_single_pdf, arg): arg[0] for arg in worker_args}
@@ -119,6 +143,8 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
 
                 if res["status"] == "error_no_text":
                     print(f"⚠️  No text: {file_path.name}")
+                    if res.get("file_hash"):
+                        _save_empty_hash(res["file_hash"])
                     stats["errors"] += 1
                     continue
 

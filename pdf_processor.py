@@ -268,7 +268,7 @@ def _process_single_pdf(args):
     Extracts text and chunks a single PDF — no DB or Ollama calls here.
     Returns a dict ready for embedding in the main thread.
     """
-    file_path, directory_path, use_ocr, indexed_hashes = args
+    file_path, directory_path, use_ocr, indexed_hashes, empty_hashes = args
     result = {
         "status": "error",
         "file_path": str(file_path),
@@ -281,6 +281,9 @@ def _process_single_pdf(args):
         current_hash = _calculate_file_hash(file_path)
         result["file_hash"] = current_hash
         if current_hash in indexed_hashes:
+            result["status"] = "already_indexed"
+            return result
+        if current_hash in empty_hashes:
             result["status"] = "already_indexed"
             return result
 
