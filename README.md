@@ -1,6 +1,10 @@
-# Knowledge Server MCP (Optimized)
+# Knowledge Server MCP
 
-A powerful MCP server for managing a semantic PDF library with indexing and OCR capabilities.
+A local, fully private semantic search engine for your PDF and epub library, integrated with [Calibre](https://calibre-ebook.com/) and [Claude Code](https://claude.ai/code) via MCP.
+
+**What it does:** index your book collection once, then ask Claude natural-language questions and get answers with exact page references — all running on your own machine, nothing sent to the cloud except your conversation with Claude.
+
+**Stack:** [Qdrant](https://qdrant.tech/) (vector DB) · [Ollama](https://ollama.ai/) (local embeddings + LLM) · [Tesseract](https://github.com/tesseract-ocr/tesseract) (OCR for scanned books) · [FastMCP](https://github.com/jlowin/fastmcp) (MCP server)
 
 ## How it works
 
