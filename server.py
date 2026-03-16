@@ -179,7 +179,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                         points.append(PointStruct(
                             id=point_id,
                             vector=embedding,
-                            payload={"text": text_to_embed, "metadata": chunk.to_metadata()}
+                            payload={"text": chunk.text, "metadata": chunk.to_metadata()}
                         ))
 
                         if len(points) >= FLUSH_EVERY:
