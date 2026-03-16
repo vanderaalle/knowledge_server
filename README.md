@@ -6,6 +6,8 @@ A local, fully private semantic search engine for your PDF and epub library, int
 
 **Stack:** [Qdrant](https://qdrant.tech/) (vector DB) · [Ollama](https://ollama.ai/) (local embeddings + LLM) · [Tesseract](https://github.com/tesseract-ocr/tesseract) (OCR for scanned books) · [FastMCP](https://github.com/jlowin/fastmcp) (MCP server)
 
+> **The MCP layer is optional.** The indexing pipeline and vector database work standalone — you can query them directly from Python, from the included Jupyter notebook, or from any MCP-compatible client (Claude Code, GitHub Copilot, Cursor, etc.). The Qdrant collection is also queryable via its REST API from any tool.
+
 ## How it works
 
 Your PDF library lives on disk. When you index it, `server.py` extracts text from each file (fast via PyMuPDF, with OCR fallback for scanned books), splits it into chunks, and sends each chunk to a local Ollama model (`mxbai-embed-large`) which converts it into an **embedding** — a list of 1024 numbers that captures the semantic meaning of the text. These are stored in **Qdrant**, a vector database running in Docker on your machine.
