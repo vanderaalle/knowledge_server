@@ -32,7 +32,7 @@ Everything runs locally. No data leaves your machine except your messages to Cla
 - **Fast Indexing**: Uses `PyMuPDF` for high-speed text extraction.
 - **OCR Support**: Fallback to Tesseract OCR for scans and images.
 - **Semantic Search**: Powered by Ollama (`mxbai-embed-large`) and Qdrant.
-- **Anna's Archive Integration**: Search and download books directly.
+- **Literal + Semantic Search**: Exact term lookup and concept-based search.
 
 ## Structure
 - `server.py`: The main MCP server entry point.
@@ -351,8 +351,6 @@ Once configured, the following tools are available:
 - **`read_page(file_hash, page_number)`** - Read a specific page
 - **`reconstruct_document(file_hash)`** - Reconstruct full document text
 - **`open_pdf_page(file_path, page_number)`** - Open a PDF at a specific page in Document Viewer
-- **`search_annas_archive(query, limit)`** - Search Anna's Archive for books
-- **`download_from_annas_archive(md5)`** - Download books from Anna's Archive
 
 ### Searching with Claude Code
 
@@ -386,12 +384,6 @@ Claude: [opens Grisey - Temporal Spaces at page 17 in Document Viewer]
 2. **Search your documents**:
    ```
    query_library("machine learning music generation", n_results=5)
-   ```
-
-3. **Find and download a book**:
-   ```
-   search_annas_archive("generative deep learning", limit=3)
-   download_from_annas_archive("c17f7a3108c48634ff635f34497c977b")
    ```
 
 ---
