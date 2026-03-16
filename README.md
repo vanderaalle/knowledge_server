@@ -453,6 +453,16 @@ server.index_library("/home/youruser/Calibre Library")
 
 Because every indexed file has a `file_hash` stored in Qdrant, `index_library` skips files it has already seen and only processes the new one. It's fast when most books are already indexed.
 
+Then optionally clean up titles and sync to Calibre:
+
+```bash
+# Fix/improve titles with LLM (skips already-fixed ones)
+python scripts/fix_titles.py
+
+# Push updated titles back to Calibre metadata
+python scripts/sync_titles_to_calibre.py --apply
+```
+
 ### Maintenance scripts
 
 | Script | What it does |
