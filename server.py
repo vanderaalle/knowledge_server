@@ -375,12 +375,22 @@ def reconstruct_document(file_hash: str) -> str:
 
 @mcp.tool()
 def open_pdf_page(file_path: str, page_number: int = 1) -> str:
-    """Open a PDF file at a specific page using the system default PDF viewer."""
+    """Open a PDF or epub file at a specific page using the system viewer."""
     import subprocess
     if not os.path.exists(file_path):
         return f"❌ File not found: {file_path}"
     try:
+        is_epub = file_path.lower().endswith(".epub")
         system = platform.system()
+
+        if is_epub:
+            # Calibre's ebook-viewer is the best cross-platform option for epubs
+            if shutil.which("ebook-viewer"):
+                subprocess.Popen(["ebook-viewer", file_path])
+            else:
+                subprocess.Popen(["xdg-open", file_path])
+            return f"✅ Opened {os.path.basename(file_path)} (use Ctrl+F to search for the passage)"
+
         if system == "Darwin":
             script = (
                 f'tell application "Preview" to open POSIX file "{file_path}"\n'
@@ -407,7 +417,7 @@ def open_pdf_page(file_path: str, page_number: int = 1) -> str:
                 return f"✅ Opened {os.path.basename(file_path)} (page navigation not supported by default viewer)"
         return f"✅ Opened {os.path.basename(file_path)} at page {page_number}"
     except Exception as e:
-        return f"❌ Could not open PDF: {e}"
+        return f"❌ Could not open file: {e}"
 
 
 @mcp.tool()
