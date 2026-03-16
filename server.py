@@ -157,8 +157,8 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                             book_vectors += len(points)
                             points = []
 
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"  ⚠️  Chunk error in {file_path.name}: {e}", file=sys.stderr)
 
                 if points:
                     db.upsert_points(points)
@@ -179,8 +179,9 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
                     else:
                         print(f"  ✅ Done: {file_path.name} ({book_vectors} chunks)")
 
-            except Exception:
+            except Exception as e:
                 stats["errors"] += 1
+                print(f"  ❌ Failed: {file_path.name}: {e}", file=sys.stderr)
 
     return stats["indexed"], stats["skipped"], stats["errors"], stats["ocr_skipped"]
 
