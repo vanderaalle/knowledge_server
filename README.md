@@ -415,6 +415,44 @@ Calibre keeps doing what it does best (library management, format conversion, me
 
 ---
 
+## Configuration
+
+On a new machine, copy the templates and edit for your setup:
+
+```bash
+cp config.example.py config.py
+cp scripts/ocr_priority_config.example.py scripts/ocr_priority_config.py
+```
+
+### config.py
+
+| Setting | Typical value | Description |
+|---------|--------------|-------------|
+| `CALIBRE_LIBRARY` | `~/Calibre Library` | Path to your Calibre library folder |
+| `EMPTY_HASH_CACHE` | `~/.local/share/knowledge_server/empty_hashes.json` | Cache of no-text file hashes — skip on future re-indexes |
+
+### Environment variables (Qdrant / Ollama)
+
+These are set in `~/.claude/settings.json` under `mcpServers.env`, or exported in your shell:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `QDRANT_HOST` | `localhost` | Qdrant host |
+| `QDRANT_PORT` | `6333` | Qdrant port |
+| `COLLECTION_NAME` | `pdf_library` | Qdrant collection name |
+| `OLLAMA_MODEL` | `mxbai-embed-large` | Embedding model |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
+
+### scripts/ocr_priority_config.py
+
+| Setting | Description |
+|---------|-------------|
+| `CALIBRE_LIBRARY` | Inherited from `config.py` — no need to set separately |
+| `TIER1_KEYWORDS` | List of title substrings to OCR first (your high-value books) |
+| `SKIP_KEYWORDS` | Books to skip even if they match Tier 1 (e.g. replacing with epub) |
+
+---
+
 ## Maintenance
 
 ### Full re-index (clean slate)
