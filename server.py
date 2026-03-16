@@ -243,6 +243,41 @@ def index_with_ocr(path: str) -> str:
 
 
 @mcp.tool()
+def search_text(term: str, n_results: int = 5) -> str:
+    """Literal text search across all indexed chunks. Use for exact terms, names, or coined words."""
+    if not term:
+        return "❌ Term richiesto"
+    from qdrant_client.http.models import Filter, FieldCondition, MatchText
+    db = get_db()
+    try:
+        results, _ = db.client.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=Filter(must=[FieldCondition(key="text", match=MatchText(text=term))]),
+            limit=n_results,
+            with_payload=True,
+            with_vectors=False
+        )
+        if not results:
+            return f"No results for '{term}'."
+        formatted = []
+        for i, r in enumerate(results, 1):
+            meta = (r.payload or {}).get("metadata", {})
+            text = (r.payload or {}).get("text", "")
+            # highlight the term in context
+            idx = text.lower().find(term.lower())
+            snippet = text[max(0, idx-100):idx+200].replace("\n", " ") if idx != -1 else text[:200]
+            formatted.append(
+                f"{i}. {meta.get('document_title', 'Unknown')}\n"
+                f"   Page {meta.get('page_number', '?')}/{meta.get('total_pages', '?')}\n"
+                f"   Path: {meta.get('source_path', 'N/A')}\n"
+                f"   ...{snippet}..."
+            )
+        return "\n\n".join(formatted)
+    except Exception as e:
+        return f"❌ Errore: {str(e)}"
+
+
+@mcp.tool()
 def query_library(query: str, n_results: int = 5) -> str:
     """Cerca nella knowledge base."""
     if not query:
