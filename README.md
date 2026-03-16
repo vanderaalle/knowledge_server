@@ -346,7 +346,8 @@ Once configured, the following tools are available:
 - **`index_library(path)`** - Fast parallel PDF indexing
 - **`index_single_pdf(file_path)`** - Index a single PDF file
 - **`index_with_ocr(path)`** - OCR-based indexing for scanned documents
-- **`query_library(query, n_results)`** - Semantic search across your library
+- **`query_library(query, n_results)`** - Semantic search: finds text *about* the same concept, even with different words
+- **`search_text(term, n_results)`** - Literal search: finds exact words or coined terms (e.g. author-specific terminology)
 - **`get_document_info(file_hash)`** - Get document metadata
 - **`read_page(file_hash, page_number)`** - Read a specific page
 - **`reconstruct_document(file_hash)`** - Reconstruct full document text
