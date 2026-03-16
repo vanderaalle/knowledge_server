@@ -105,7 +105,7 @@ def get_no_text_books():
     return books
 
 
-SKIP_KEYWORDS = ["kagel", "cybernetics"]
+SKIP_KEYWORDS = ["kagel", "cybernetics", "at home in the universe"]
 
 def is_tier1(title: str) -> bool:
     t = title.lower()
