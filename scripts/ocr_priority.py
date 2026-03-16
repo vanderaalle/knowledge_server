@@ -19,72 +19,24 @@ import subprocess
 # Add parent dir so we can import from server.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-CALIBRE_LIBRARY = "/home/andrea/Calibre Library"
 DRY_RUN = "--dry-run" in sys.argv
 ALL_NO_TEXT = "--all" in sys.argv
 
-# Tier 1: high-value books to OCR first (matched against Calibre title, case-insensitive substring)
-TIER1_KEYWORDS = [
-    "russolo",
-    "rosenblueth",
-    "edvac",
-    "cybernetics",
-    "ecological approach",
-    "notes on the synthesis of form",
-    "languages of art",
-    "inquiries into truth",
-    "simondon",
-    "vampyroteuthis",
-    "pandora",
-    "song books",
-    "cage silence",
-    "die reihe",
-    "xenakis",
-    "kagel",
-    "nono",
-    "boulez",
-    "traite de l'orchestration",
-    "traité de l'orchestration",
-    "new musical resources",
-    "harmony book",
-    "tuning, timbre",
-    "microsound",
-    "technology of computer music",
-    "elements of computer music",
-    "origins of order",
-    "course in general linguistics",
-    "tesniere",
-    "tesnière",
-    "bertin",
-    "metaphors on vision",
-    "on weaving",
-    "partch",
-    "mindstorms",
-    "deep learning with python",
-    "concrete mathematics",
-    "thinking in postscript",
-    "audible past",
-    "cracked media",
-    "cinema by other means",
-    "composing electronic music",
-    "sound poetry",
-    "wireless imagination",
-    "composing with tape",
-    "african fractals",
-    "emergence-from-chaos",
-    "theory of recursive function",
-    "giant brains",
-    "studies in the way of words",
-    "readings in zoosemiotics",
-    "cowell",
-    "designing sound",
-    "persichetti",
-    "bailey",
-    "berlioz",
-    "piston",
-    "oxford history of music",
-    "american minimal music",
-]
+# Load personal config (gitignored) — fall back to empty defaults
+_config_path = os.path.join(os.path.dirname(__file__), "ocr_priority_config.py")
+if os.path.exists(_config_path):
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location("ocr_priority_config", _config_path)
+    _cfg = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_cfg)
+    CALIBRE_LIBRARY = _cfg.CALIBRE_LIBRARY
+    TIER1_KEYWORDS = _cfg.TIER1_KEYWORDS
+    SKIP_KEYWORDS = getattr(_cfg, "SKIP_KEYWORDS", [])
+else:
+    print("⚠️  No ocr_priority_config.py found. Copy scripts/ocr_priority_config.example.py and edit it.")
+    CALIBRE_LIBRARY = os.path.expanduser("~/Calibre Library")
+    TIER1_KEYWORDS = []
+    SKIP_KEYWORDS = []
 
 
 def calibredb(*args):
@@ -105,7 +57,6 @@ def get_no_text_books():
     return books
 
 
-SKIP_KEYWORDS = ["kagel", "cybernetics", "at home in the universe"]
 
 def is_tier1(title: str) -> bool:
     t = title.lower()
