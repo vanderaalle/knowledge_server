@@ -424,17 +424,18 @@ Do this when you want a fresh database — e.g. after a code update that changes
 **Takes several hours. Do it when you can leave the machine running overnight.**
 
 ```python
-# In ks_sandbox.ipynb — run cells in order:
+# In knowledge_server.ipynb — run cells in order:
 
-# 1. Wipe the collection
+# 1. Wipe the collection (cell 4)
 db = server.get_db()
 db.delete_collection()
 
-# 2. Re-index all text PDFs (no OCR)
+# 2. Re-index all text PDFs and epubs (no OCR) (cell 5)
 server.index_library("/home/youruser/Calibre Library")
+```
 
+```bash
 # 3. After step 2 finishes, run OCR on scanned books
-# (from terminal)
 python scripts/ocr_priority.py
 
 # 4. Fix/improve titles using the LLM
@@ -463,6 +464,20 @@ python scripts/fix_titles.py
 python scripts/sync_titles_to_calibre.py --apply
 ```
 
+### Removing or replacing a book
+
+When you delete a book from Calibre or replace it with a better version, its old chunks remain in Qdrant pointing to a path that no longer exists. Clean them up with:
+
+```bash
+# Dry run — shows what would be deleted
+python scripts/cleanup_orphans.py
+
+# Apply
+python scripts/cleanup_orphans.py --apply
+```
+
+Then run `index_library` to pick up any new/replacement files.
+
 ### Maintenance scripts
 
 | Script | What it does |
@@ -473,6 +488,7 @@ python scripts/sync_titles_to_calibre.py --apply
 | `scripts/sync_titles_to_calibre.py` | Pushes LLM-generated titles from Qdrant back to Calibre metadata |
 | `scripts/audit_calibre_coverage.py` | Shows which Calibre books are indexed in Qdrant (matched by file hash) |
 | `scripts/backfill_file_hash.py` | Backfills missing `file_hash` metadata on existing Qdrant chunks |
+| `scripts/cleanup_orphans.py` | Removes Qdrant chunks whose source file no longer exists on disk |
 
 ### Checking index coverage
 
