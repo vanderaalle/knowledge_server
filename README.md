@@ -8,6 +8,13 @@ Your PDF library lives on disk. When you index it, `server.py` extracts text fro
 
 When you search, your query goes through the same process: converted to numbers, then Qdrant finds the stored chunks whose numbers are most similar. No keywords needed — just natural language.
 
+### Semantic search vs. exact search
+
+The server provides two complementary search tools:
+
+- **`query_library`** — semantic search. Finds text that is *about* the same concept, even if it uses different words. Best when you have a topic or idea in mind but don't know exactly where it appears. Example: searching "sound granulation" will also surface chunks about microsound, particle synthesis, stochastic clouds.
+- **`search_text`** — literal search. Finds chunks that contain the exact term or phrase. Best when you know a specific word, name, or coined term. Example: searching "semethic" will find exactly where Hoffmeyer uses that word.
+
 If you connect this server to **Claude Code** via MCP, you can ask Claude questions directly and it will query your library under the hood.
 
 ```
