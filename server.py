@@ -52,7 +52,11 @@ mcp = FastMCP("knowledge-server-optimized")
 
 # Cache of file hashes known to have no extractable text — persisted to disk
 # so index_library skips them instantly on future runs without opening the file.
-_EMPTY_HASH_CACHE_PATH = os.path.expanduser("~/.local/share/knowledge_server/empty_hashes.json")
+try:
+    from config import EMPTY_HASH_CACHE as _EMPTY_HASH_CACHE_PATH
+    _EMPTY_HASH_CACHE_PATH = os.path.expanduser(_EMPTY_HASH_CACHE_PATH)
+except ImportError:
+    _EMPTY_HASH_CACHE_PATH = os.path.expanduser("~/.local/share/knowledge_server/empty_hashes.json")
 
 def _load_empty_hashes() -> set:
     try:

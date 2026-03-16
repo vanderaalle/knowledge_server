@@ -12,7 +12,10 @@ import sys
 import json
 import fitz  # PyMuPDF
 
-CALIBRE_LIBRARY = "/home/andrea/Calibre Library"
+try:
+    from config import CALIBRE_LIBRARY
+except ImportError:
+    CALIBRE_LIBRARY = os.path.expanduser("~/Calibre Library")
 TAG = "no-text"
 TEXT_THRESHOLD = 150  # characters across first 3 pages to be considered "has text"
 

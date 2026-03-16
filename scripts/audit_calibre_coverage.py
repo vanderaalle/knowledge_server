@@ -20,7 +20,10 @@ import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-CALIBRE_LIBRARY = "/home/andrea/Calibre Library"
+try:
+    from config import CALIBRE_LIBRARY
+except ImportError:
+    CALIBRE_LIBRARY = os.path.expanduser("~/Calibre Library")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 COLLECTION = os.getenv("COLLECTION_NAME", "pdf_library")

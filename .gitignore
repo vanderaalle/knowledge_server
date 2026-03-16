@@ -31,3 +31,4 @@ index_ocr_resume_nohup.log
 index_ocr_remaining_nohup.log
 mcp_settings.json
 scripts/ocr_priority_config.py
+config.py
