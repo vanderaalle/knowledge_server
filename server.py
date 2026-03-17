@@ -58,6 +58,16 @@ try:
 except ImportError:
     _EMPTY_HASH_CACHE_PATH = os.path.expanduser("~/.local/share/knowledge_server/empty_hashes.json")
 
+try:
+    from config import PDF_VIEWER as _PDF_VIEWER
+except ImportError:
+    _PDF_VIEWER = None  # auto-detect
+
+try:
+    from config import EPUB_VIEWER as _EPUB_VIEWER
+except ImportError:
+    _EPUB_VIEWER = None  # auto-detect
+
 def _load_empty_hashes() -> set:
     try:
         with open(_EMPTY_HASH_CACHE_PATH) as f:
@@ -385,19 +395,18 @@ def open_pdf_page(file_path: str, page_number: int = 1, search_term: str = "") -
         system = platform.system()
 
         if is_epub:
-            if shutil.which("ebook-viewer"):
-                cmd = ["ebook-viewer", file_path]
-                if search_term:
-                    cmd += [f"--open-at=search:{search_term}"]
-                subprocess.Popen(cmd)
+            viewer = _EPUB_VIEWER if _EPUB_VIEWER and shutil.which(_EPUB_VIEWER) else None
+            if viewer:
+                subprocess.Popen([viewer, file_path])
             else:
                 subprocess.Popen(["xdg-open", file_path])
             msg = f"✅ Opened {os.path.basename(file_path)}"
             if search_term:
-                msg += f" — jumping to '{search_term}'"
-            else:
-                msg += " (use Ctrl+F to find the passage)"
+                msg += f" — jumping to '{search_term}' (use Ctrl+F to find the passage)"
             return msg
+
+        # PDF opening with page navigation
+        pdf_viewer = _PDF_VIEWER if _PDF_VIEWER and shutil.which(_PDF_VIEWER) else None
 
         if system == "Darwin":
             script = (
@@ -413,16 +422,17 @@ def open_pdf_page(file_path: str, page_number: int = 1, search_term: str = "") -
                 subprocess.Popen([sumatra, "-page", str(page_number), file_path])
             else:
                 os.startfile(file_path)
+        elif pdf_viewer == "evince" or (not pdf_viewer and shutil.which("evince")):
+            subprocess.Popen(["evince", f"--page-index={page_number - 1}", file_path])
+        elif pdf_viewer == "okular" or (not pdf_viewer and shutil.which("okular")):
+            subprocess.Popen(["okular", "--page", str(page_number), file_path])
+        elif pdf_viewer == "zathura" or (not pdf_viewer and shutil.which("zathura")):
+            subprocess.Popen(["zathura", "--page", str(page_number - 1), file_path])
+        elif pdf_viewer:
+            subprocess.Popen([pdf_viewer, file_path])
         else:
-            if shutil.which("evince"):
-                subprocess.Popen(["evince", f"--page-index={page_number - 1}", file_path])
-            elif shutil.which("okular"):
-                subprocess.Popen(["okular", "--page", str(page_number), file_path])
-            elif shutil.which("zathura"):
-                subprocess.Popen(["zathura", "--page", str(page_number - 1), file_path])
-            else:
-                subprocess.Popen(["xdg-open", file_path])
-                return f"✅ Opened {os.path.basename(file_path)} (page navigation not supported by default viewer)"
+            subprocess.Popen(["xdg-open", file_path])
+            return f"✅ Opened {os.path.basename(file_path)} (page navigation not supported by default viewer)"
         return f"✅ Opened {os.path.basename(file_path)} at page {page_number}"
     except Exception as e:
         return f"❌ Could not open file: {e}"

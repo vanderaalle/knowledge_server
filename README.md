@@ -1,6 +1,6 @@
 # Knowledge Server MCP
 
-A local, fully private semantic search engine for your PDF and epub library, integrated with [Calibre](https://calibre-ebook.com/) and [Claude Code](https://claude.ai/code) via MCP.
+A local, fully private semantic search engine for your PDF and epub library, integrated with [Claude Code](https://claude.ai/code) via MCP.
 
 **What it does:** index your book collection once, then ask Claude natural-language questions and get answers with exact page references — all running on your own machine, nothing sent to the cloud except your conversation with Claude.
 
@@ -402,14 +402,22 @@ Claude: [opens Grisey - Temporal Spaces at page 17 in Document Viewer]
 
 ---
 
-## Workflow: Calibre + Knowledge Server
+## Recommended setup: flat Books folder
 
-A good pairing: use **Calibre** to manage your PDF library (organize, tag, convert, read), and let the knowledge server handle semantic search on top of it.
+The simplest and most maintainable layout is a flat folder of PDFs — no library manager required.
 
-1. Add books to Calibre normally — it stores them under `~/Calibre Library/` by default.
-2. Point the indexer at your Calibre library:
+```
+~/Books/
+  Silence - John Cage.pdf
+  Computer Music Tutorial - Curtis Roads.pdf
+  Syntactic Structures - Noam Chomsky.pdf
+  ...
+```
+
+1. Drop your PDFs into `~/Books/` (or any flat folder).
+2. Point the indexer at it:
    ```
-   index_library("/home/youruser/Calibre Library")
+   index_library("/home/youruser/Books")
    ```
 3. Search with natural language via Claude Code or `manual_search.py`:
    ```
@@ -417,7 +425,9 @@ A good pairing: use **Calibre** to manage your PDF library (organize, tag, conve
    ```
 4. Claude returns ranked results with titles, pages, and snippets — pick one and it opens in your PDF viewer at the exact page.
 
-Calibre keeps doing what it does best (library management, format conversion, metadata editing). The knowledge server adds a semantic layer on top, without touching or duplicating your files.
+The knowledge server is the index — filenames and Qdrant are the only metadata you need. No external library manager, no path drift when metadata changes.
+
+> **Using Calibre?** It works too — just point `index_library` at your Calibre Library folder. But be aware that renaming books in Calibre moves their files, which can make source paths in Qdrant go stale. `scripts/cleanup_orphans.py` cleans those up.
 
 ---
 
@@ -434,8 +444,10 @@ cp scripts/ocr_priority_config.example.py scripts/ocr_priority_config.py
 
 | Setting | Typical value | Description |
 |---------|--------------|-------------|
-| `CALIBRE_LIBRARY` | `~/Calibre Library` | Path to your Calibre library folder |
+| `BOOKS_DIR` | `~/Books` | Path to your flat PDF folder |
 | `EMPTY_HASH_CACHE` | `~/.local/share/knowledge_server/empty_hashes.json` | Cache of no-text file hashes — skip on future re-indexes |
+| `PDF_VIEWER` | `evince` | App to open PDFs (`evince`, `okular`, `zathura`, or `None` for system default) |
+| `EPUB_VIEWER` | `foliate` | App to open epubs (`foliate`, or `None` for system default) |
 
 ### Environment variables (Qdrant / Ollama)
 
@@ -453,9 +465,9 @@ These are set in `~/.claude/settings.json` under `mcpServers.env`, or exported i
 
 | Setting | Description |
 |---------|-------------|
-| `CALIBRE_LIBRARY` | Inherited from `config.py` — no need to set separately |
-| `TIER1_KEYWORDS` | List of title substrings to OCR first (your high-value books) |
-| `SKIP_KEYWORDS` | Books to skip even if they match Tier 1 (e.g. replacing with epub) |
+| `BOOKS_DIR` | Inherited from `config.py` — no need to set separately |
+| `TIER1_KEYWORDS` | List of filename substrings to OCR first (your high-value books) |
+| `SKIP_KEYWORDS` | Books to skip even if they match Tier 1 |
 
 ---
 
@@ -475,7 +487,7 @@ db = server.get_db()
 db.delete_collection()
 
 # 2. Re-index all text PDFs and epubs (no OCR) (cell 5)
-server.index_library("/home/youruser/Calibre Library")
+server.index_library("/home/youruser/Books")
 ```
 
 ```bash
@@ -490,27 +502,23 @@ Steps 2–4 are safe to resume if interrupted — each one skips already-indexed
 
 ### Adding a new book
 
-Add the book to Calibre normally, then re-run the indexer on the whole library:
+Drop the PDF into `~/Books/`, then re-run the indexer:
 
 ```python
-server.index_library("/home/youruser/Calibre Library")
+server.index_library("/home/youruser/Books")
 ```
 
 Because every indexed file has a `file_hash` stored in Qdrant, `index_library` skips files it has already seen and only processes the new one. It's fast when most books are already indexed.
 
-Then optionally clean up titles and sync to Calibre:
+Optionally fix/improve the title with the LLM:
 
 ```bash
-# Fix/improve titles with LLM (skips already-fixed ones)
 python scripts/fix_titles.py
-
-# Push updated titles back to Calibre metadata
-python scripts/sync_titles_to_calibre.py --apply
 ```
 
 ### Removing or replacing a book
 
-When you delete a book from Calibre or replace it with a better version, its old chunks remain in Qdrant pointing to a path that no longer exists. Clean them up with:
+When you delete or replace a PDF, its old chunks remain in Qdrant pointing to a path that no longer exists. Clean them up with:
 
 ```bash
 # Dry run — shows what would be deleted
@@ -527,19 +535,9 @@ Then run `index_library` to pick up any new/replacement files.
 | Script | What it does |
 |--------|-------------|
 | `scripts/fix_titles.py` | Uses `llama3.2` to generate clean titles from first-page text and stores them in Qdrant |
-| `scripts/tag_no_text.py` | Scans Calibre library, tags image-only PDFs with "no-text" in Calibre |
-| `scripts/ocr_priority.py` | Runs Tesseract OCR on high-value "no-text" books and indexes them |
-| `scripts/sync_titles_to_calibre.py` | Pushes LLM-generated titles from Qdrant back to Calibre metadata |
-| `scripts/audit_calibre_coverage.py` | Shows which Calibre books are indexed in Qdrant (matched by file hash) |
+| `scripts/ocr_priority.py` | Scans `~/Books/` for unindexed PDFs, runs Tesseract OCR on priority books |
+| `scripts/export_library_report.py` | Generates a markdown or CSV report of all indexed books from Qdrant |
 | `scripts/backfill_file_hash.py` | Backfills missing `file_hash` metadata on existing Qdrant chunks |
 | `scripts/cleanup_orphans.py` | Removes Qdrant chunks whose source file no longer exists on disk |
 | `scripts/backfill_full_text.py` | Backfills full chunk text in Qdrant (fixes truncation from older index runs) |
-
-### Checking index coverage
-
-```bash
-python scripts/audit_calibre_coverage.py
-```
-
-Shows how many Calibre books are indexed, how many are missing, and which ones need OCR.
 

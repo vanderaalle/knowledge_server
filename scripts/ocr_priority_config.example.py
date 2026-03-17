@@ -1,9 +1,9 @@
 # Personal OCR priority configuration — not tracked in git
-# Copy this file and edit to match your library.
+# Copy this file to ocr_priority_config.py and edit to match your library.
 
-CALIBRE_LIBRARY = "/home/andrea/Calibre Library"
+BOOKS_DIR = "/home/youruser/Books"
 
-# Books to OCR first — matched case-insensitively against Calibre title
+# Books to OCR first — matched case-insensitively against filename
 TIER1_KEYWORDS = [
     "russolo",
     "rosenblueth",

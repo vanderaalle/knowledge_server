@@ -2,8 +2,8 @@
 """
 Remove Qdrant chunks whose source_path no longer exists on disk.
 
-Use this after removing or replacing books in Calibre to keep
-the vector DB in sync with the actual library.
+Use this after removing or replacing PDFs to keep
+the vector DB in sync with what's actually on disk.
 
 Usage:
   python cleanup_orphans.py           # dry run — show what would be removed
