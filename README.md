@@ -502,18 +502,17 @@ Steps 2–4 are safe to resume if interrupted — each one skips already-indexed
 
 ### Adding a new book
 
-Drop the PDF into `~/Books/`, then re-run the indexer:
-
-```python
-server.index_library("/home/youruser/Books")
-```
-
-Because every indexed file has a `file_hash` stored in Qdrant, `index_library` skips files it has already seen and only processes the new one. It's fast when most books are already indexed.
-
-Optionally fix/improve the title with the LLM:
+The easiest way — runs the full pipeline (copy → index → fix title → clean orphans):
 
 ```bash
-python scripts/fix_titles.py
+# Add a single book (copies to ~/Books/ if not already there)
+python scripts/add_book.py /path/to/book.pdf
+
+# For a scanned book needing OCR
+python scripts/add_book.py /path/to/book.pdf --ocr
+
+# Index everything new in ~/Books/ at once
+python scripts/add_book.py --scan
 ```
 
 ### Removing or replacing a book
@@ -534,6 +533,7 @@ Then run `index_library` to pick up any new/replacement files.
 
 | Script | What it does |
 |--------|-------------|
+| `scripts/add_book.py` | Full pipeline: copy PDF → index → fix title → clean orphans. Use for adding single books or scanning for new ones (`--scan`) |
 | `scripts/fix_titles.py` | Uses `llama3.2` to generate clean titles from first-page text and stores them in Qdrant |
 | `scripts/ocr_priority.py` | Scans `~/Books/` for unindexed PDFs, runs Tesseract OCR on priority books |
 | `scripts/export_library_report.py` | Generates a markdown or CSV report of all indexed books from Qdrant |
