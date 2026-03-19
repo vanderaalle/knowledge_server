@@ -10,7 +10,7 @@ import os
 import asyncio
 
 # Add the knowledge_server directory to the path so we can import server modules
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server import _index_directory
 
