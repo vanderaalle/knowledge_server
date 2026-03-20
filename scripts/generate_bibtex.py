@@ -5,13 +5,11 @@ Generate BibTeX entries for PDFs in Qdrant that are not in miaBiblio.bib.
 Strategy (in order):
   1. DOI found       -> CrossRef authoritative BibTeX
   2. arXiv ID found  -> arXiv API
-  3. JSTOR URL found -> JSTOR metadata API
+  3. JSTOR URL found -> CrossRef (via 10.2307/{id})
   4. ISBN found      -> OpenLibrary API
-  5. Fallback        -> Ollama LLM extraction from actual first page (pdftotext)
-  6. Validate        -> reject if title or author missing
+  5. No identifier   -> skip (logged as no_identifier)
 
-First-page text is extracted directly from the PDF file (pdftotext), not from
-Qdrant chunks, giving the LLM a proper title page to work with.
+First-page text is extracted directly from the PDF file (pdftotext).
 
 Incremental: results written immediately, progress saved to a checkpoint file.
 Restart safely — already-processed files are skipped.
@@ -29,7 +27,6 @@ import os
 import re
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 
 import requests
 from qdrant_client import QdrantClient
@@ -41,8 +38,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 QDRANT_HOST   = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT   = int(os.getenv("QDRANT_PORT", "6333"))
 COLLECTION    = os.getenv("COLLECTION_NAME", "pdf_library")
-OLLAMA_URL    = "http://localhost:11434/api/chat"
-OLLAMA_MODEL  = "llama3.2"
 CROSSREF_URL   = "https://api.crossref.org/works/{doi}/transform/application/x-bibtex"
 ARXIV_URL      = "https://export.arxiv.org/abs/{arxiv_id}"
 OPENLIBRARY_URL = "https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
@@ -190,44 +185,6 @@ def openlibrary_bibtex(isbn):
     except Exception:
         return None
 
-
-def llm_extract(filename, title, text):
-    prompt = (
-        "Extract bibliographic metadata from the PDF first page below.\n"
-        "Rules:\n"
-        "- Only use information EXPLICITLY present in the text.\n"
-        "- If a field is not in the text, write UNKNOWN for its value.\n"
-        "- Do NOT invent or guess journal names, volume numbers, or page ranges.\n"
-        "- Choose entry type: @article, @book, @inproceedings, @techreport, @misc.\n"
-        "- Citation key: a SINGLE alphanumeric token, NO spaces, NO commas, NO special chars.\n"
-        "  Format: FirstAuthorSurnameYYYY (e.g. Smith2010, MullerUNKNOWN). One word only.\n"
-        "- Return ONLY the BibTeX entry, no markdown, no explanation.\n"
-        "- Example format:\n"
-        "  @article{Smith2010,\n"
-        "    author = {Smith, John},\n"
-        "    title = {My Title},\n"
-        "    year = {2010},\n"
-        "  }\n\n"
-        f"Filename: {filename}\nStored title: {title}\n\n"
-        f"--- FIRST PAGE ---\n{text[:2500]}\n--- END ---"
-    )
-    try:
-        r = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-            },
-            timeout=60,
-        )
-        entry = r.json()["message"]["content"].strip()
-        if not entry.startswith("@"):
-            idx = entry.find("@")
-            entry = entry[idx:] if idx >= 0 else ""
-        return entry or None
-    except Exception:
-        return None
 
 
 def validate(entry, source_text):
@@ -410,13 +367,10 @@ def main():
                     entry = ob
                     method = f"openlibrary:{isbn}"
 
-        # 5. LLM fallback using actual first-page text
+        # 5. No identifier found — skip
         if not entry:
-            entry = llm_extract(filename, info["title"], page1_text)
-
-        if not entry:
-            checkpoint[sp] = "invalid:no_entry"
-            log.write(f"ERROR: {filename}\n")
+            checkpoint[sp] = "skip:no_identifier"
+            log.write(f"SKIP_NO_ID: {filename}\n")
             log.flush()
             invalid += 1
             with open(args.ckpt, "w") as f:
