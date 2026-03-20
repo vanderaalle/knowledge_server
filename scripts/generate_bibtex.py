@@ -3,15 +3,21 @@
 Generate BibTeX entries for PDFs in Qdrant that are not in miaBiblio.bib.
 
 Strategy (in order):
-  1. DOI found in first-page text  -> CrossRef authoritative BibTeX
-  2. Fallback                      -> Ollama LLM extraction (extract-only, no invention)
-  3. Validate                      -> reject if title or author missing
+  1. DOI found       -> CrossRef authoritative BibTeX
+  2. arXiv ID found  -> arXiv API
+  3. JSTOR URL found -> JSTOR metadata API
+  4. ISBN found      -> OpenLibrary API
+  5. Fallback        -> Ollama LLM extraction from actual first page (pdftotext)
+  6. Validate        -> reject if title or author missing
+
+First-page text is extracted directly from the PDF file (pdftotext), not from
+Qdrant chunks, giving the LLM a proper title page to work with.
 
 Incremental: results written immediately, progress saved to a checkpoint file.
 Restart safely — already-processed files are skipped.
 
 Usage:
-  python generate_bibtex.py                        # generate for all Qdrant docs (no deduplication)
+  python generate_bibtex.py                        # generate for all Qdrant docs
   python generate_bibtex.py --bib ~/mylib.bib      # skip docs already in existing bib
   python generate_bibtex.py --out ~/my.bib         # custom output file
   python generate_bibtex.py --reset                # clear checkpoint and start over
@@ -21,7 +27,9 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 import requests
 from qdrant_client import QdrantClient
@@ -35,7 +43,9 @@ QDRANT_PORT   = int(os.getenv("QDRANT_PORT", "6333"))
 COLLECTION    = os.getenv("COLLECTION_NAME", "pdf_library")
 OLLAMA_URL    = "http://localhost:11434/api/chat"
 OLLAMA_MODEL  = "llama3.2"
-CROSSREF_URL  = "https://api.crossref.org/works/{doi}/transform/application/x-bibtex"
+CROSSREF_URL   = "https://api.crossref.org/works/{doi}/transform/application/x-bibtex"
+ARXIV_URL      = "https://export.arxiv.org/abs/{arxiv_id}"
+OPENLIBRARY_URL = "https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
 
 DEFAULT_BIB   = None   # pass --bib <file> to compare against an existing library
 DEFAULT_OUT   = os.path.expanduser("~/qdrant_generated.bib")
@@ -61,6 +71,40 @@ def extract_doi(text):
     return m.group(1).rstrip(".") if m else None
 
 
+def extract_arxiv_id(text):
+    m = re.search(r"arXiv[:\s]+(\d{4}\.\d{4,5}(?:v\d+)?)", text, re.IGNORECASE)
+    if not m:
+        m = re.search(r"arxiv\.org/abs/(\d{4}\.\d{4,5})", text, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def extract_jstor_id(text):
+    m = re.search(r"jstor\.org/stable/(\d+)", text, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def extract_isbn(text):
+    m = re.search(r"ISBN[:\s-]*([\d\-X]{10,17})", text, re.IGNORECASE)
+    if m:
+        return re.sub(r"[-\s]", "", m.group(1))
+    return None
+
+
+def get_first_page_text(source_path):
+    """Extract first page text directly from PDF via pdftotext."""
+    try:
+        result = subprocess.run(
+            ["pdftotext", "-f", "1", "-l", "1", source_path, "-"],
+            capture_output=True, text=True, timeout=30
+        )
+        text = result.stdout.strip()
+        if text:
+            return text
+    except Exception:
+        pass
+    return None
+
+
 def crossref_bibtex(doi):
     try:
         r = requests.get(
@@ -73,6 +117,78 @@ def crossref_bibtex(doi):
     except Exception:
         pass
     return None
+
+
+def arxiv_bibtex(arxiv_id):
+    try:
+        clean_id = re.sub(r"v\d+$", "", arxiv_id)
+        r = requests.get(
+            f"https://export.arxiv.org/abs/{clean_id}",
+            headers={"User-Agent": "knowledge-server/1.0"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return None
+        # Parse title and authors from HTML (arXiv doesn't serve BibTeX directly)
+        title_m = re.search(r'<h1 class="title[^"]*">\s*<span[^>]*>Title:</span>\s*(.+?)\s*</h1>', r.text, re.DOTALL)
+        authors_m = re.findall(r'<div class="authors">.*?<a[^>]*>([^<]+)</a>', r.text, re.DOTALL)
+        year_m = re.search(r'<div class="dateline">[^<]*(\d{4})', r.text)
+        if not title_m:
+            return None
+        title = re.sub(r'\s+', ' ', title_m.group(1)).strip()
+        authors = " and ".join(authors_m) if authors_m else "UNKNOWN"
+        year = year_m.group(1) if year_m else "UNKNOWN"
+        surname = re.sub(r"[^a-zA-Z]", "", authors.split(",")[0].split()[-1])
+        key = f"{surname}{year}"
+        return (
+            f"@article{{{key},\n"
+            f"  author = {{{authors}}},\n"
+            f"  title = {{{title}}},\n"
+            f"  year = {{{year}}},\n"
+            f"  eprint = {{{arxiv_id}}},\n"
+            f"  archivePrefix = {{arXiv}},\n"
+            f"}}"
+        )
+    except Exception:
+        return None
+
+
+def jstor_bibtex(jstor_id):
+    """JSTOR articles have DOI 10.2307/{jstor_id} — resolve via CrossRef."""
+    doi = f"10.2307/{jstor_id}"
+    return crossref_bibtex(doi)
+
+
+def openlibrary_bibtex(isbn):
+    try:
+        r = requests.get(
+            OPENLIBRARY_URL.format(isbn=isbn),
+            headers={"User-Agent": "knowledge-server/1.0"},
+            timeout=15,
+        )
+        data = r.json()
+        if not data:
+            return None
+        book = list(data.values())[0]
+        title = book.get("title", "UNKNOWN")
+        authors = " and ".join(a["name"] for a in book.get("authors", [])) or "UNKNOWN"
+        year = book.get("publish_date", "UNKNOWN")
+        year_m = re.search(r"\d{4}", str(year))
+        year = year_m.group() if year_m else "UNKNOWN"
+        publisher = book.get("publishers", [{}])[0].get("name", "UNKNOWN") if book.get("publishers") else "UNKNOWN"
+        surname = re.sub(r"[^a-zA-Z]", "", (authors.split(",")[0].split()[-1]))
+        key = f"{surname}{year}"
+        return (
+            f"@book{{{key},\n"
+            f"  author = {{{authors}}},\n"
+            f"  title = {{{title}}},\n"
+            f"  year = {{{year}}},\n"
+            f"  publisher = {{{publisher}}},\n"
+            f"  isbn = {{{isbn}}},\n"
+            f"}}"
+        )
+    except Exception:
+        return None
 
 
 def llm_extract(filename, title, text):
@@ -253,17 +369,50 @@ def main():
                 json.dump(checkpoint, f)
             continue
 
+        # Try to get better first-page text directly from the PDF
+        page1_text = get_first_page_text(sp) or text
+
         entry = None
         method = "llm"
-        doi = extract_doi(text)
+
+        # 1. DOI → CrossRef
+        doi = extract_doi(page1_text)
         if doi:
             cr = crossref_bibtex(doi)
             if cr:
                 entry = cr
                 method = f"crossref:{doi}"
 
+        # 2. arXiv ID → arXiv API
         if not entry:
-            entry = llm_extract(filename, info["title"], text)
+            arxiv_id = extract_arxiv_id(page1_text)
+            if arxiv_id:
+                ar = arxiv_bibtex(arxiv_id)
+                if ar:
+                    entry = ar
+                    method = f"arxiv:{arxiv_id}"
+
+        # 3. JSTOR ID → JSTOR metadata
+        if not entry:
+            jstor_id = extract_jstor_id(page1_text)
+            if jstor_id:
+                jb = jstor_bibtex(jstor_id)
+                if jb:
+                    entry = jb
+                    method = f"jstor:{jstor_id}"
+
+        # 4. ISBN → OpenLibrary
+        if not entry:
+            isbn = extract_isbn(page1_text)
+            if isbn:
+                ob = openlibrary_bibtex(isbn)
+                if ob:
+                    entry = ob
+                    method = f"openlibrary:{isbn}"
+
+        # 5. LLM fallback using actual first-page text
+        if not entry:
+            entry = llm_extract(filename, info["title"], page1_text)
 
         if not entry:
             checkpoint[sp] = "invalid:no_entry"
