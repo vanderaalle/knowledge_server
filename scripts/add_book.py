@@ -5,7 +5,7 @@ Full pipeline for adding a new book to the knowledge base.
 Steps:
   1. Copy PDF to ~/Books/ (if not already there)
   2. Index it (with optional OCR)
-  3. Fix the title using LLM
+  3. Set the title from the filename (strips brackets, year, suffixes)
   4. Clean up any orphan chunks
 
 Usage:
@@ -54,23 +54,31 @@ def step_index(path: str, use_ocr: bool):
     return indexed
 
 
+def title_from_filename(pdf_path: str) -> str:
+    """Derive a clean title from the PDF filename."""
+    import re
+    name = os.path.splitext(os.path.basename(pdf_path))[0]
+    # Strip leading [N] or (N) markers
+    name = re.sub(r'^\[\d+\]\s*', '', name)
+    name = re.sub(r'^\(\d+\)\s*', '', name)
+    # Strip trailing _indexed, _ocr, _ridotto suffixes
+    name = re.sub(r'[_\s]+(indexed|ocr|ridotto|reduced|compressed)$', '', name, flags=re.IGNORECASE)
+    # Replace underscores with spaces
+    name = name.replace('_', ' ')
+    return name.strip()
+
+
 def step_fix_title(pdf_path: str):
-    """Run LLM title fix on one specific document (by source_path)."""
+    """Set document title from filename (stripped of brackets, year, suffixes)."""
     from qdrant_client import QdrantClient
-    import requests
 
     QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
     QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
     COLLECTION = os.getenv("COLLECTION_NAME", "pdf_library")
-    OLLAMA_URL = "http://localhost:11434/api/chat"
-    OLLAMA_MODEL = "llama3.2"
 
     client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
-    # Find all chunks for this file and get first-page text
     all_pts = []
-    best_text = ""
-    best_page = 9999
     offset = None
     while True:
         pts, offset = client.scroll(collection_name=COLLECTION, limit=500,
@@ -79,10 +87,6 @@ def step_fix_title(pdf_path: str):
             meta = (p.payload or {}).get("metadata", {})
             if meta.get("source_path") == pdf_path:
                 all_pts.append(p)
-                pg = meta.get("page_number", 9999)
-                if pg < best_page:
-                    best_page = pg
-                    best_text = (p.payload or {}).get("text", "")
         if offset is None:
             break
 
@@ -91,34 +95,16 @@ def step_fix_title(pdf_path: str):
         return
 
     current_title = (all_pts[0].payload or {}).get("metadata", {}).get("document_title", "")
-    print(f"  Current title: {current_title}")
+    suggested = title_from_filename(pdf_path)
 
-    if not best_text.strip():
-        print("  No text available for LLM title fix — skipping")
-        return
-
-    # Ask LLM
-    prompt = (
-        "You are given the first page of a PDF document. "
-        "Extract the document title. "
-        "Return ONLY the title, nothing else — no explanation, no quotes, no punctuation at the end. "
-        "If you cannot determine the title, return UNKNOWN.\n\n"
-        f"--- FIRST PAGE ---\n{best_text[:2000]}\n--- END ---"
-    )
+    print(f"  Suggested title: {suggested}")
+    print(f"  Enter title (Author - Title format) or press Enter to accept: ", end="", flush=True)
     try:
-        r = requests.post(OLLAMA_URL, json={
-            "model": OLLAMA_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-        }, timeout=30)
-        new_title = r.json()["message"]["content"].strip()
-    except Exception as e:
-        print(f"  LLM error: {e}")
-        return
+        user_input = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        user_input = ""
 
-    if not new_title or new_title.upper() == "UNKNOWN":
-        print("  LLM could not determine title — skipping")
-        return
+    new_title = user_input if user_input else suggested
 
     if new_title == current_title:
         print(f"  Title unchanged: {new_title}")
@@ -126,12 +112,10 @@ def step_fix_title(pdf_path: str):
 
     print(f"  New title: {new_title}")
 
-    # Update all chunks
     for p in all_pts:
         old_payload = p.payload or {}
         old_meta = old_payload.get("metadata", {})
-        new_meta = {**old_meta, "document_title": new_title,
-                    "document_title_original": old_meta.get("document_title", current_title)}
+        new_meta = {**old_meta, "document_title": new_title}
         client.overwrite_payload(collection_name=COLLECTION,
                                  payload={**old_payload, "metadata": new_meta},
                                  points=[p.id])
@@ -179,7 +163,7 @@ def main():
     parser.add_argument("--ocr", action="store_true", help="Force OCR (use for scanned books)")
     parser.add_argument("--scan", action="store_true",
                         help=f"Index all new books in {BOOKS_DIR}, fix their titles, clean up")
-    parser.add_argument("--no-fix-title", action="store_true", help="Skip LLM title fix")
+    parser.add_argument("--no-fix-title", action="store_true", help="Skip filename-based title fix")
     parser.add_argument("--no-cleanup", action="store_true", help="Skip orphan cleanup")
     args = parser.parse_args()
 
