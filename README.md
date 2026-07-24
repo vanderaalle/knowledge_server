@@ -541,3 +541,7 @@ Then run `index_library` to pick up any new/replacement files.
 | `scripts/cleanup_orphans.py` | Removes Qdrant chunks whose source file no longer exists on disk |
 | `scripts/backfill_full_text.py` | Backfills full chunk text in Qdrant (fixes truncation from older index runs) |
 
+## Acknowledgments
+
+This project started from an original idea and initial implementation by [Carlo Barbagallo](https://github.com/nojarec) ([nojarec/knowledge_server](https://github.com/nojarec/knowledge_server)). This repo has since diverged significantly and is maintained independently.
+
