@@ -12,7 +12,8 @@
       "Bash(shuf -n 60 unmatched.tsv)",
       "Bash(shuf -n 80 still_unmatched.tsv)",
       "Bash(git remote *)",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "Bash(git merge *)"
     ]
   }
 }
