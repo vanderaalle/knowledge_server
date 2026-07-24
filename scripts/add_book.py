@@ -31,8 +31,8 @@ except ImportError:
 def step_copy(src: str) -> str:
     """Copy PDF to ~/Books/ if it's not already there. Returns final path."""
     src = os.path.abspath(src)
-    if os.path.dirname(src) == BOOKS_DIR:
-        print(f"  Already in Books folder: {os.path.basename(src)}")
+    if src == BOOKS_DIR or src.startswith(BOOKS_DIR + os.sep):
+        print(f"  Already in Books folder: {os.path.relpath(src, BOOKS_DIR)}")
         return src
     dest = os.path.join(BOOKS_DIR, os.path.basename(src))
     if os.path.exists(dest):

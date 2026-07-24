@@ -11,6 +11,9 @@ env/
 # System Files
 .DS_Store
 
+# Claude Code local/personal settings (not meant to be shared)
+.claude/settings.local.json
+
 # Logs and PID files
 *.log
 *.pid

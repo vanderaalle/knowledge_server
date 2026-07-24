@@ -232,32 +232,32 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
 
 @mcp.tool()
 def index_library(path: str, delete_all: bool = False) -> str:
-    """Indicizza PDF in parallelo e velocemente."""
+    """Index PDFs in parallel, quickly."""
     if not path:
-        return "❌ Path richiesto"
+        return "❌ Path required"
     try:
         indexed, skipped, errors, ocr_skip = _index_directory(path, use_ocr=False, delete_all=delete_all)
-        result = f"""✅ Indicizzazione ottimizzata completata!
+        result = f"""✅ Optimized indexing completed!
 
-📊 Risultati:
-• PDF indicizzati: {indexed}
-• Già presenti: {skipped}
-• Richiedono OCR: {ocr_skip}
-• Errori: {errors}
+📊 Results:
+• PDFs indexed: {indexed}
+• Already present: {skipped}
+• Need OCR: {ocr_skip}
+• Errors: {errors}
 """
         if ocr_skip > 0:
-            result += f"\n💡 Tip: {ocr_skip} PDF richiedono OCR (usa index_with_ocr)."
+            result += f"\n💡 Tip: {ocr_skip} PDFs need OCR (use index_with_ocr)."
         return result
     except Exception as e:
         import traceback
-        return f"❌ Errore: {str(e)}\n{traceback.format_exc()}"
+        return f"❌ Error: {str(e)}\n{traceback.format_exc()}"
 
 
 @mcp.tool()
 def index_single_pdf(file_path: str) -> str:
-    """Indicizza un singolo PDF (con OCR se necessario)."""
+    """Index a single PDF (with OCR if needed)."""
     if not file_path:
-        return "❌ Path richiesto"
+        return "❌ Path required"
     try:
         indexed, skipped, errors, ocr_skip = _index_directory(file_list=[file_path], use_ocr=True)
         if skipped > 0:
@@ -268,26 +268,26 @@ def index_single_pdf(file_path: str) -> str:
         return f"⚠️  No text extracted from: {file_path}"
     except Exception as e:
         import traceback
-        return f"❌ Errore: {str(e)}\n{traceback.format_exc()}"
+        return f"❌ Error: {str(e)}\n{traceback.format_exc()}"
 
 
 @mcp.tool()
 def index_with_ocr(path: str) -> str:
-    """Indicizza con OCR (Lento ma accurato per scansioni)."""
+    """Index with OCR (slow but accurate for scans)."""
     if not path:
-        return "❌ Path richiesto"
+        return "❌ Path required"
     try:
         indexed, skipped, errors, _ = _index_directory(path, use_ocr=True, delete_all=False)
-        return f"✅ OCR Completato. Indicizzati: {indexed}, Saltati: {skipped}, Errori: {errors}"
+        return f"✅ OCR completed. Indexed: {indexed}, Skipped: {skipped}, Errors: {errors}"
     except Exception as e:
-        return f"❌ Errore: {str(e)}"
+        return f"❌ Error: {str(e)}"
 
 
 @mcp.tool()
 def search_text(term: str, n_results: int = 5) -> str:
     """Literal text search across all indexed chunks. Use for exact terms, names, or coined words."""
     if not term:
-        return "❌ Term richiesto"
+        return "❌ Term required"
     from qdrant_client.http.models import Filter, FieldCondition, MatchText
     db = get_db()
     try:
@@ -315,20 +315,20 @@ def search_text(term: str, n_results: int = 5) -> str:
             )
         return "\n\n".join(formatted)
     except Exception as e:
-        return f"❌ Errore: {str(e)}"
+        return f"❌ Error: {str(e)}"
 
 
 @mcp.tool()
 def query_library(query: str, n_results: int = 5) -> str:
-    """Cerca nella knowledge base."""
+    """Search the knowledge base."""
     if not query:
-        return "❌ Query richiesta"
+        return "❌ Query required"
     db = get_db()
     try:
         response = ollama.embeddings(model=OLLAMA_MODEL, prompt=query)
         results = db.search(response["embedding"], limit=n_results)
         if not results:
-            return "Nessun risultato."
+            return "No results."
         formatted = []
         for i, result in enumerate(results, 1):
             meta = result['metadata']
@@ -341,32 +341,32 @@ def query_library(query: str, n_results: int = 5) -> str:
             )
         return "\n".join(formatted)
     except Exception as e:
-        return f"❌ Errore: {str(e)}"
+        return f"❌ Error: {str(e)}"
 
 
 @mcp.tool()
 def get_document_info(file_hash: str) -> str:
-    """Info documento e struttura via hash."""
+    """Document info and structure via hash."""
     db = get_db()
     try:
         chunks = db.get_chunks_by_file(file_hash)
         if not chunks:
-            return "❌ Documento non trovato"
+            return "❌ Document not found"
         meta = chunks[0]["metadata"]
-        return f"📚 {meta.get('document_title','Unknown')}\nFile: {meta.get('source')}\nPagine: {meta.get('total_pages')}\nChunks: {len(chunks)}"
+        return f"📚 {meta.get('document_title','Unknown')}\nFile: {meta.get('source')}\nPages: {meta.get('total_pages')}\nChunks: {len(chunks)}"
     except Exception as e:
         return f"Error: {e}"
 
 
 @mcp.tool()
 def read_page(file_hash: str, page_number: int) -> str:
-    """Leggi pagina specifica."""
+    """Read a specific page."""
     db = get_db()
     try:
         chunks = db.get_chunks_by_file(file_hash)
         page_chunks = [c for c in chunks if c["metadata"].get("page_number") == page_number]
         if not page_chunks:
-            return "Pagina non trovata"
+            return "Page not found"
         return "\n\n".join([c["text"] for c in page_chunks])
     except Exception as e:
         return str(e)
@@ -374,7 +374,7 @@ def read_page(file_hash: str, page_number: int) -> str:
 
 @mcp.tool()
 def reconstruct_document(file_hash: str) -> str:
-    """Ricostruisci intero documento."""
+    """Reconstruct the entire document."""
     db = get_db()
     try:
         chunks = db.get_chunks_by_file(file_hash)
@@ -441,9 +441,9 @@ def open_pdf_page(file_path: str, page_number: int = 1, search_term: str = "") -
 @mcp.tool()
 def search_annas_archive(query: str, limit: int = 5, lang: str = '', ext: str = '') -> str:
     """
-    Cerca libri su Anna's Archive.
-    Supporta ricerca semantica automatica se la query sembra naturale.
-    Ritorna una lista di risultati con MD5 per il download.
+    Search for books on Anna's Archive.
+    Supports automatic semantic search if the query looks like natural language.
+    Returns a list of results with MD5 for download.
     """
     search_query = query
     if len(query.split()) > 3:
@@ -503,20 +503,20 @@ def search_annas_archive(query: str, limit: int = 5, lang: str = '', ext: str = 
                     break
 
         if not results:
-            return f"❌ Nessun risultato trovato per '{search_query}'."
+            return f"❌ No results found for '{search_query}'."
 
-        return f"V2.1 - {len(results)} risultati\n\n" + "\n\n".join(results) + "\n\n💡 Usa 'download_from_annas_archive(md5)' per scaricare."
+        return f"V2.1 - {len(results)} results\n\n" + "\n\n".join(results) + "\n\n💡 Use 'download_from_annas_archive(md5)' to download."
 
     except Exception as e:
-        return f"❌ Errore ricerca: {e}"
+        return f"❌ Search error: {e}"
 
 
 @mcp.tool()
 def download_from_annas_archive(md5: str) -> str:
     """
-    Scarica un libro da Anna's Archive dato il suo MD5.
-    Salva il file in 'alias_books/'.
-    Tenta download automatico da IPFS/Libgen, altrimenti ritorna link manuali.
+    Download a book from Anna's Archive given its MD5.
+    Saves the file in 'alias_books/'.
+    Attempts automatic download from IPFS/Libgen, otherwise returns manual links.
     """
     try:
         response = None
@@ -586,11 +586,11 @@ def download_from_annas_archive(md5: str) -> str:
                         with open(filepath, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
-                        return f"✅ Download completato: {filepath}"
+                        return f"✅ Download completed: {filepath}"
             except Exception:
                 continue
 
-        msg = f"❌ Download automatico fallito. Non sono stati trovati link diretti in formato PDF per '{full_name}'.\n\nEcco i link per il controllo manuale:\n"
+        msg = f"❌ Automatic download failed. No direct PDF links found for '{full_name}'.\n\nHere are the links for manual checking:\n"
         for link in slow_links[:3]:
             msg += f"🔗 Slow Server: {link}\n"
         for link in libgen_links[:1]:
@@ -600,7 +600,7 @@ def download_from_annas_archive(md5: str) -> str:
     except Exception as e:
         import traceback
         traceback.print_exc(file=sys.stderr)
-        return f"❌ Errore recupero dettagli: {e}"
+        return f"❌ Error retrieving details: {e}"
 
 
 if __name__ == "__main__":

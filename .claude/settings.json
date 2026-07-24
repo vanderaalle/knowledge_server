@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sL -o /tmp/gbooks.html \"https://books.google.com/books?id=oRc4IrYOdAwC\" --max-time 20 -A \"Mozilla/5.0\" -w \"HTTP:%{http_code}\\\\n\")",
+      "WebFetch(domain:www.libreriadelsanto.it)",
+      "WebFetch(domain:giunti.it)",
+      "WebFetch(domain:opac.sbn.it)",
+      "WebFetch(domain:www.seunanottedinvernounlibro.it)",
+      "Bash(ps -o etimes= -p 391486)",
+      "Bash(pdfinfo \"/home/andrea/Books/RearWindow/Robin Wood - Hitchcock’s Films Revisited \\(2002, Columbia University Press\\) - libgen.li.pdf\")",
+      "Bash(shuf -n 40 /tmp/claude-1000/-home-andrea-knowledge-server-knowledge-server/9839cfdd-991a-46eb-9399-b64a7c600a5e/scratchpad/all_titles.tsv)",
+      "Bash(shuf -n 60 unmatched.tsv)",
+      "Bash(shuf -n 80 still_unmatched.tsv)",
+      "Bash(git remote *)",
+      "Bash(git branch *)"
+    ]
+  }
+}
