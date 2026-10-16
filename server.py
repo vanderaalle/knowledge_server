@@ -38,7 +38,7 @@ from bs4 import BeautifulSoup
 
 from pdf_processor import (
     TextChunk, PDFProcessor,
-    _process_single_pdf, _worker_init,
+    _process_single_pdf, _worker_init, _calculate_file_hash,
     MAX_WORKERS
 )
 from vector_db import VectorDBClient, get_db, OLLAMA_MODEL, COLLECTION_NAME
@@ -84,6 +84,28 @@ def _save_empty_hash(file_hash: str):
             json.dump(list(hashes), f)
     except Exception:
         pass
+
+# File hashes that must always be OCR'd, even though they have a text layer
+# (garbled font encodings). Keyed by hash so the entry survives renames/moves.
+try:
+    from config import FORCE_OCR_LIST as _FORCE_OCR_PATH
+    _FORCE_OCR_PATH = os.path.expanduser(_FORCE_OCR_PATH)
+except ImportError:
+    _FORCE_OCR_PATH = os.path.expanduser("~/.local/share/knowledge_server/force_ocr.json")
+
+def _load_force_ocr_hashes() -> set:
+    try:
+        with open(_FORCE_OCR_PATH) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def _add_force_ocr_hash(file_hash: str):
+    os.makedirs(os.path.dirname(_FORCE_OCR_PATH), exist_ok=True)
+    hashes = _load_force_ocr_hashes()
+    hashes.add(file_hash)
+    with open(_FORCE_OCR_PATH, "w") as f:
+        json.dump(sorted(hashes), f, indent=1)
 
 
 def _get_annas_response(endpoint: str, params: dict = None, stream: bool = False):
@@ -132,7 +154,8 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
     start_time = time.time()
     total_vectors = 0
 
-    worker_args = [(p, directory_path, use_ocr, indexed_hashes, empty_hashes) for p in all_pdfs]
+    force_ocr_hashes = _load_force_ocr_hashes()
+    worker_args = [(p, directory_path, use_ocr, indexed_hashes, empty_hashes, force_ocr_hashes) for p in all_pdfs]
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, initializer=_worker_init) as executor:
         futures = {executor.submit(_process_single_pdf, arg): arg[0] for arg in worker_args}
@@ -281,6 +304,26 @@ def index_with_ocr(path: str) -> str:
         return f"✅ OCR completed. Indexed: {indexed}, Skipped: {skipped}, Errors: {errors}"
     except Exception as e:
         return f"❌ Error: {str(e)}"
+
+
+@mcp.tool()
+def reindex_with_ocr(file_path: str) -> str:
+    """Re-index one PDF by OCR'ing every page, replacing its existing chunks.
+    Use when a PDF's text layer is garbled (search returns gibberish for it).
+    The file is remembered, so full re-indexes keep using OCR for it."""
+    if not file_path or not os.path.exists(file_path):
+        return "❌ Existing file path required"
+    try:
+        file_hash = _calculate_file_hash(Path(file_path))
+        _add_force_ocr_hash(file_hash)
+        get_db().delete_by_file(file_hash)
+        indexed, _, errors, _ = _index_directory(file_list=[file_path], use_ocr=True)
+        if indexed:
+            return f"✅ Re-indexed with OCR: {file_path}"
+        return f"⚠️  OCR produced no text for: {file_path} (errors: {errors})"
+    except Exception as e:
+        import traceback
+        return f"❌ Error: {str(e)}\n{traceback.format_exc()}"
 
 
 @mcp.tool()

@@ -161,6 +161,18 @@ class VectorDBClient:
         except Exception:
             return []
 
+    def delete_by_file(self, file_hash: str):
+        self.client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=models.FilterSelector(filter=models.Filter(
+                must=[models.FieldCondition(
+                    key="metadata.file_hash",
+                    match=models.MatchValue(value=file_hash)
+                )]
+            )),
+            wait=True,
+        )
+
     def delete_collection(self):
         try:
             self.client.delete_collection(collection_name=COLLECTION_NAME)

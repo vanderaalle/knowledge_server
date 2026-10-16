@@ -116,8 +116,22 @@ class PDFProcessor:
     def __init__(self):
         self.text_splitter = SimpleTextSplitter(chunk_size=800, chunk_overlap=150)
 
-    def extract_text_from_pdf(self, pdf_path: str, use_ocr: bool = False) -> tuple:
+    def _ocr_all_pages(self, pdf_path: str) -> tuple:
+        """OCR every page, ignoring any embedded text layer."""
+        images = convert_from_path(pdf_path, dpi=300, poppler_path=POPPLER_PATH)
+        page_texts = [pytesseract.image_to_string(img) for img in images]
+        return "\n".join(page_texts) + "\n", page_texts, len(page_texts), True
+
+    def extract_text_from_pdf(self, pdf_path: str, use_ocr: bool = False, force_ocr: bool = False) -> tuple:
+        """
+        force_ocr: OCR every page even if a text layer exists. Use for PDFs whose
+        text layer is garbled (broken font encodings), which the normal fallback
+        never catches because the extracted text is non-empty.
+        """
         try:
+            if force_ocr:
+                return self._ocr_all_pages(pdf_path)
+
             doc = fitz.open(pdf_path)
             total_pages = len(doc)
             page_texts = []
@@ -268,7 +282,7 @@ def _process_single_pdf(args):
     Extracts text and chunks a single PDF — no DB or Ollama calls here.
     Returns a dict ready for embedding in the main thread.
     """
-    file_path, directory_path, use_ocr, indexed_hashes, empty_hashes = args
+    file_path, directory_path, use_ocr, indexed_hashes, empty_hashes, force_ocr_hashes = args
     result = {
         "status": "error",
         "file_path": str(file_path),
@@ -287,15 +301,16 @@ def _process_single_pdf(args):
             result["status"] = "already_indexed"
             return result
 
+        force_ocr = current_hash in force_ocr_hashes
         if file_path.suffix.lower() == ".epub":
             text, page_texts, total_pages, used_ocr = pdf_processor.extract_text_from_epub(str(file_path))
         else:
             text, page_texts, total_pages, used_ocr = pdf_processor.extract_text_from_pdf(
-                str(file_path), use_ocr=use_ocr
+                str(file_path), use_ocr=use_ocr, force_ocr=force_ocr
             )
 
         result["used_ocr"] = used_ocr
-        if used_ocr and not use_ocr:
+        if used_ocr and not use_ocr and not force_ocr:
             result["status"] = "skipped_ocr"
             return result
 
