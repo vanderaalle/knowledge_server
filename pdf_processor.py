@@ -74,40 +74,52 @@ class SimpleTextSplitter:
         self.separators = ["\n\n", "\n", ". ", "! ", "? ", " ", ""]
 
     def split_text(self, text: str) -> List[str]:
-        final_chunks = []
-        separator = ""
-        for sep in self.separators:
+        return self._split(text, self.separators)
+
+    def _split(self, text: str, separators: List[str]) -> List[str]:
+        """Split on the coarsest separator present, recursing into pieces that are
+        still too long with the finer separators. Every returned chunk is a
+        contiguous substring of the input (chunk_text relies on this)."""
+        separator, finer = "", []
+        for i, sep in enumerate(separators):
             if sep == "" or sep in text:
-                separator = sep
+                separator, finer = sep, separators[i + 1:]
                 break
 
         splits = text.split(separator) if separator else list(text)
-        current_chunk = []
-        current_length = 0
+        final_chunks, good = [], []
+        for split in splits:
+            if len(split) <= self.chunk_size:
+                good.append(split)
+                continue
+            if good:
+                final_chunks.extend(self._merge(good, separator))
+                good = []
+            if finer:
+                final_chunks.extend(self._split(split, finer))
+            else:
+                final_chunks.append(split)
+        if good:
+            final_chunks.extend(self._merge(good, separator))
+        return [c for c in final_chunks if c.strip()]
 
+    def _merge(self, splits: List[str], separator: str) -> List[str]:
+        """Greedily join short pieces into chunks of at most chunk_size, carrying
+        up to chunk_overlap characters of trailing pieces into the next chunk."""
+        chunks, current, length = [], [], 0
         for split in splits:
             split_len = len(split)
-            if current_length + split_len + len(separator) > self.chunk_size:
-                if current_chunk:
-                    final_chunks.append(separator.join(current_chunk))
-                    overlap_chunk = []
-                    overlap_len = 0
-                    for item in reversed(current_chunk):
-                        if overlap_len + len(item) + len(separator) <= self.chunk_overlap:
-                            overlap_chunk.insert(0, item)
-                            overlap_len += len(item) + len(separator)
-                        else:
-                            break
-                    current_chunk = overlap_chunk
-                    current_length = overlap_len
-
-            current_chunk.append(split)
-            current_length += split_len + len(separator)
-
-        if current_chunk:
-            final_chunks.append(separator.join(current_chunk))
-
-        return final_chunks
+            if current and length + split_len + len(separator) > self.chunk_size:
+                chunks.append(separator.join(current))
+                while current and (length > self.chunk_overlap or
+                                   length + split_len + len(separator) > self.chunk_size):
+                    length -= len(current[0]) + len(separator)
+                    current.pop(0)
+            current.append(split)
+            length += split_len + len(separator)
+        if current:
+            chunks.append(separator.join(current))
+        return chunks
 
 
 class PDFProcessor:
@@ -215,11 +227,16 @@ class PDFProcessor:
         chunks = self.text_splitter.split_text(text)
         chunk_objects = []
 
+        # Locate each page in the joined text (PDF pages are joined with "\n",
+        # epub chapters with "\n\n"), so the mapping holds for both.
         page_boundaries = []
         char_count = 0
         for page_text in page_texts:
-            page_boundaries.append((char_count, char_count + len(page_text)))
-            char_count += len(page_text) + 1
+            start = text.find(page_text, char_count) if page_text else -1
+            if start == -1:
+                start = char_count
+            page_boundaries.append((start, start + len(page_text)))
+            char_count = start + len(page_text)
 
         document_title = base_metadata.get('document_title', 'Unknown')
         text_pos = 0

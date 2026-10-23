@@ -273,7 +273,7 @@ def _index_directory_unlocked(directory_path: str = None, use_ocr: bool = False,
 
                 for chunk in chunks:
                     try:
-                        text_to_embed = chunk.text[:700].strip()
+                        text_to_embed = chunk.text.strip()
                         if not text_to_embed:
                             continue
 
