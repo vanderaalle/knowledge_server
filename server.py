@@ -34,6 +34,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 import ollama
+from qdrant_client import models
 from qdrant_client.models import PointStruct
 from mcp.server.fastmcp import FastMCP, Context
 from tqdm import tqdm
@@ -45,6 +46,7 @@ from pdf_processor import (
     MAX_WORKERS
 )
 from vector_db import VectorDBClient, get_db, embed_query, OLLAMA_MODEL, COLLECTION_NAME
+import library_checks as lc
 
 
 mcp = FastMCP("knowledge-server-optimized")
@@ -96,7 +98,10 @@ def _in_thread(fn):
                 # Progress must increase on every notification, so send elapsed
                 # seconds and put the human-readable status in the message.
                 elapsed = int(time.monotonic() - start)
-                await ctx.report_progress(elapsed, message=status["message"])
+                try:
+                    await ctx.report_progress(elapsed, message=status["message"])
+                except Exception:
+                    pass  # progress is best-effort; never fail the job over it
 
         async with anyio.create_task_group() as tg:
             tg.start_soon(heartbeat)
@@ -308,6 +313,35 @@ def _index_directory_unlocked(directory_path: str = None, use_ocr: bool = False,
     return stats["indexed"], stats["skipped"], stats["errors"], stats["ocr_skipped"]
 
 
+def _index_files(path: str, use_ocr: bool) -> tuple:
+    """Index a file or folder with sources relative to BOOKS_DIR (when inside it),
+    so every book's metadata.source looks the same however it was indexed."""
+    root = lc.BOOKS_DIR if os.path.abspath(path).startswith(lc.BOOKS_DIR + os.sep) else None
+    if os.path.isdir(path):
+        files = [str(p) for p in Path(path).rglob("*") if p.suffix.lower() in lc.BOOK_EXTENSIONS]
+        if not files:
+            return 0, 0, 0, 0
+        return _index_directory(directory_path=root or path, file_list=files, use_ocr=use_ocr)
+    return _index_directory(directory_path=root, file_list=[path], use_ocr=use_ocr)
+
+
+def _finish_new_books(before: set) -> str:
+    """For books indexed since `before`: set the title from the filename and
+    report convention warnings (see library_checks.py)."""
+    db = get_db()
+    lines = []
+    for h in db.get_all_indexed_hashes() - before:
+        pts, _ = db.client.scroll(COLLECTION_NAME, scroll_filter=lc._hash_filter(models, h), limit=1,
+                                  with_vectors=False, with_payload=["metadata.source_path"])
+        path = pts[0].payload["metadata"].get("source_path", "") if pts else ""
+        if not path:
+            continue
+        title = lc.set_filename_title(db.client, COLLECTION_NAME, h, path)
+        warnings = lc.warnings_for(path) if os.path.exists(path) else []
+        lines.append(f"• {title}" + "".join(f"\n    ⚠️ {w}" for w in warnings))
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # MCP Tools
 # ---------------------------------------------------------------------------
@@ -319,7 +353,11 @@ def index_library(path: str, delete_all: bool = False) -> str:
     if not path:
         return "❌ Path required"
     try:
-        indexed, skipped, errors, ocr_skip = _index_directory(path, use_ocr=False, delete_all=delete_all)
+        if delete_all:
+            with _INDEX_LOCK:
+                get_db().delete_collection()
+        before = get_db().get_all_indexed_hashes()
+        indexed, skipped, errors, ocr_skip = _index_files(path, use_ocr=False)
         result = f"""✅ Optimized indexing completed!
 
 📊 Results:
@@ -330,6 +368,8 @@ def index_library(path: str, delete_all: bool = False) -> str:
 """
         if ocr_skip > 0:
             result += f"\n💡 Tip: {ocr_skip} PDFs need OCR (use index_with_ocr)."
+        if indexed:
+            result += "\n\nNew books (title set from filename):\n" + _finish_new_books(before)
         return result
     except Exception as e:
         import traceback
@@ -339,17 +379,26 @@ def index_library(path: str, delete_all: bool = False) -> str:
 @mcp.tool()
 @_in_thread
 def index_single_pdf(file_path: str) -> str:
-    """Index a single PDF (with OCR if needed)."""
+    """Index a single PDF or EPUB (scanned pages are OCR'd). Sets the title from
+    the filename and reports any library-convention warnings. For a new book
+    from outside the library, prefer scripts/add_book.py, which checks first."""
     if not file_path:
         return "❌ Path required"
     try:
-        indexed, skipped, errors, ocr_skip = _index_directory(file_list=[file_path], use_ocr=True)
+        file_hash = _calculate_file_hash(Path(file_path))
+        indexed, skipped, errors, _ = _index_files(file_path, use_ocr=True)
         if skipped > 0:
             return f"⏭️  Already indexed: {file_path}"
-        if indexed > 0:
-            ocr_note = " (OCR)" if ocr_skip == 0 else ""
-            return f"✅ Indexed{ocr_note}: {file_path}"
-        return f"⚠️  No text extracted from: {file_path}"
+        if not indexed:
+            return f"⚠️  No text extracted from: {file_path}"
+        db = get_db()
+        title = lc.set_filename_title(db.client, COLLECTION_NAME, file_hash, file_path)
+        v = lc.verify_indexed(db.client, COLLECTION_NAME, file_hash)
+        result = (f"✅ Indexed: {file_path}\n   title: {title}\n   {v['chunks']} chunks, text on "
+                  f"{v['pages_with_text']}/{v['total_pages']} pages ({v['coverage']:.0%})")
+        for w in lc.warnings_for(file_path):
+            result += f"\n   ⚠️ {w}"
+        return result
     except Exception as e:
         import traceback
         return f"❌ Error: {str(e)}\n{traceback.format_exc()}"
@@ -362,8 +411,12 @@ def index_with_ocr(path: str) -> str:
     if not path:
         return "❌ Path required"
     try:
-        indexed, skipped, errors, _ = _index_directory(path, use_ocr=True, delete_all=False)
-        return f"✅ OCR completed. Indexed: {indexed}, Skipped: {skipped}, Errors: {errors}"
+        before = get_db().get_all_indexed_hashes()
+        indexed, skipped, errors, _ = _index_files(path, use_ocr=True)
+        result = f"✅ OCR completed. Indexed: {indexed}, Skipped: {skipped}, Errors: {errors}"
+        if indexed:
+            result += "\n\nNew books (title set from filename):\n" + _finish_new_books(before)
+        return result
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
@@ -379,10 +432,16 @@ def reindex_with_ocr(file_path: str) -> str:
     try:
         file_hash = _calculate_file_hash(Path(file_path))
         _add_force_ocr_hash(file_hash)
+        db = get_db()
+        # Keep the book's title (often curated by hand) across the delete + re-index.
+        pts, _ = db.client.scroll(COLLECTION_NAME, scroll_filter=lc._hash_filter(models, file_hash), limit=1,
+                                  with_vectors=False, with_payload=["metadata.document_title"])
+        old_title = pts[0].payload["metadata"].get("document_title") if pts else None
         with _INDEX_LOCK:
-            get_db().delete_by_file(file_hash)
-            indexed, _, errors, _ = _index_directory(file_list=[file_path], use_ocr=True)
+            db.delete_by_file(file_hash)
+            indexed, _, errors, _ = _index_files(file_path, use_ocr=True)
         if indexed:
+            lc.set_filename_title(db.client, COLLECTION_NAME, file_hash, file_path, old_title)
             return f"✅ Re-indexed with OCR: {file_path}"
         return f"⚠️  OCR produced no text for: {file_path} (errors: {errors})"
     except Exception as e:

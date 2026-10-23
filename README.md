@@ -529,26 +529,34 @@ server.index_library("/home/youruser/Books")
 # 3. After step 2 finishes, run OCR on scanned books
 python scripts/ocr_priority.py
 
-# 4. Fix/improve titles using the LLM
-python scripts/fix_titles.py
 ```
 
-Steps 2–4 are safe to resume if interrupted — each one skips already-indexed files (by hash) or already-fixed titles.
+Steps 2–3 are safe to resume if interrupted — each one skips already-indexed files (by hash) or already-fixed titles.
 
 ### Adding a new book
 
-The easiest way — runs the full pipeline (copy → index → fix title → clean orphans):
+`scripts/add_book.py` checks a book against the library conventions in `library_checks.py`, then moves it into its shelf, indexes it, sets the title from the filename and reports chunks and page coverage. Nothing is moved or indexed unless every check passes.
+
+The conventions: books live in a shelf folder (never the library root); filenames are `Author - Title (Year)` (`A & B - ...`, `A, B & C - ...`, `A et al. - ...`, `Name (ed.) - ...`); the indexed title comes from the filename; figures, scraps and duplicates go to `~/Books Extra/debris`, which is not indexed.
 
 ```bash
-# Add a single book (copies to ~/Books/ if not already there)
-python scripts/add_book.py /path/to/book.pdf
+# Check only (changes nothing)
+python scripts/add_book.py ~/Downloads/x.pdf --shelf Semiotics/General-Theory --name "Umberto Eco - Kant and the Platypus (1997)" --check
 
-# For a scanned book needing OCR
-python scripts/add_book.py /path/to/book.pdf --ocr
+# Add it: move + rename into the shelf, index, title, verify
+python scripts/add_book.py ~/Downloads/x.pdf --shelf Semiotics/General-Theory --name "Umberto Eco - Kant and the Platypus (1997)"
 
-# Index everything new in ~/Books/ at once
+# Garbled text layer (broken font encoding): OCR every page instead
+python scripts/add_book.py FILE --shelf ... --name ... --force-ocr
+
+# Books already placed in a shelf but not indexed yet
+python scripts/add_book.py --scan --check
 python scripts/add_book.py --scan
 ```
+
+It refuses duplicates (same file already indexed), the library root, non-conforming names, likely debris and suspect text layers; `--allow-name`, `--allow-junk` and `--allow-garbled` override a check you have looked at. Scanned pages are OCR'd automatically. The MCP indexing tools follow the same rules: they set titles from filenames and report convention warnings.
+
+To audit the whole library (read-only), `python scripts/check_library.py` writes `~/Books/library_audit.tsv`: files at the root, non-conforming names, likely debris, scans and suspect text layers, and books missing from the index.
 
 ### Removing or replacing a book
 
@@ -568,8 +576,10 @@ Then run `index_library` to pick up any new/replacement files.
 
 | Script | What it does |
 |--------|-------------|
-| `scripts/add_book.py` | Full pipeline: copy PDF → index → fix title → clean orphans. Use for adding single books or scanning for new ones (`--scan`) |
-| `scripts/fix_titles.py` | Uses `llama3.2` to generate clean titles from first-page text and stores them in Qdrant |
+| `scripts/add_book.py` | Check → move into shelf → index → title from filename → verify. Single books, or `--scan` for new books already in a shelf |
+| `scripts/check_library.py` | Read-only audit of the library against the conventions; writes `~/Books/library_audit.tsv` |
+| `scripts/reindex_nightly.py` | Resumable re-index into a new collection in nightly windows (see `scripts/systemd/`) |
+| `scripts/fix_titles.py` | Legacy: LLM-generated titles. Superseded by filename titles; don't use for new books |
 | `scripts/ocr_priority.py` | Scans `~/Books/` for unindexed PDFs, runs Tesseract OCR on priority books |
 | `scripts/export_library_report.py` | Generates a markdown or CSV report of all indexed books from Qdrant |
 | `scripts/backfill_file_hash.py` | Backfills missing `file_hash` metadata on existing Qdrant chunks |

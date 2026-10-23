@@ -83,7 +83,7 @@ def main():
     from vector_db import get_db
     from qdrant_client import models
     sys.path.insert(0, os.path.join(ROOT, "scripts"))
-    from add_book import title_from_filename
+    from library_checks import title_from_filename
     from pathlib import Path
 
     try:
