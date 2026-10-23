@@ -438,19 +438,30 @@ The knowledge server is the index — filenames and Qdrant are the only metadata
 A local web UI for exploring the library, independent of Claude. Named for Borges and for Jorge of Burgos, the librarian in Eco's *The Name of the Rose*; its map view is the Aedificium, after his labyrinthine library.
 
 
+Works on Linux, macOS and Windows. Use the Python from the project's virtual environment:
+
 ```bash
-./jorge.sh                    # starts the server if needed, opens an app window
-# or: .venv/bin/python jorge.py [--port 8765] [--no-open]
+.venv/bin/python jorge.py --launch     # start in the background if needed, open an app window, exit
+.venv/bin/python jorge.py              # or run the server in the foreground (Ctrl+C to stop)
 ```
+
+On Windows the interpreter is `.venv\Scripts\python.exe` (use `pythonw.exe` for a shortcut, so no console window stays open). The app window uses Chrome, Edge, Brave or Chromium when one is installed (`--app` mode); otherwise Jorge opens in your default browser. Options: `--port 8765` (or `JORGE_PORT`), `--no-open`.
+
+To put Jorge in your app menu or dock, make a shortcut that runs `jorge.py --launch` with the venv's Python and uses `jorge_static/jorge.png` as its icon:
+
+- **Linux:** a `.desktop` file in `~/.local/share/applications/` with `Exec=/path/to/.venv/bin/python /path/to/jorge.py --launch`
+- **macOS:** an Automator "Application" with a *Run Shell Script* action running the same command
+- **Windows:** a shortcut to `.venv\Scripts\pythonw.exe jorge.py --launch`, with "Start in" set to the project folder
 
 - **Shelves**: folder tree under `BOOKS_DIR` with book counts, plus two housekeeping shelves: files on disk that are not indexed, and indexed books whose file has moved or been deleted.
 - **Covers / List**: sortable by title, date added, pages or size; the search box filters titles live.
 - **Concepts / Exact words**: the same semantic and literal search as `query_library` / `search_text`, limited to the selected shelf, with results grouped by book.
 - **Book topics**: ranks whole books for an idea. It retrieves the 600 closest passages and scores each book on its five best ones, weighted 1, 0.6, 0.4, 0.3, 0.2, so a book that keeps returning to the topic outranks a single passing mention.
-- **Aedificium**: a zoomable map where each book is a dot placed by what its text is about (the mean of its passage vectors, linked to its 6 nearest books), coloured by top-level shelf. Searches and the title filter light up matching books and zoom to them; the legend filters by shelf. Regions are labelled at two zoom levels (about 12 broad areas, about 40 neighbourhoods), using title words that are frequent in a region but rare in the library and in other regions; broad areas take the leading terms of the neighbourhoods inside them. The first build reads every vector (about 1.5 minutes for 240k passages) and caches book vectors in `~/.cache/knowledge_server/book_vectors.npz`; after that only new or re-indexed books are recomputed.
+- **Aedificium**: a zoomable map where each book is a dot placed by what its text is about (the mean of its passage vectors, linked to its 6 nearest books), coloured by top-level shelf. Searches and the title filter light up matching books and zoom to them; the legend filters by shelf. Regions are labelled at two zoom levels (about 12 broad areas, about 40 neighbourhoods), using title words that are frequent in a region but rare in the library and in other regions; broad areas take the leading terms of the neighbourhoods inside them. The first build reads every vector (about 1.5 minutes for 240k passages) and caches book vectors in the knowledge_server cache folder (`~/.cache/knowledge_server` on Linux, `~/Library/Caches/knowledge_server` on macOS, `%LOCALAPPDATA%\knowledge_server\Cache` on Windows), next to cover thumbnails and `jorge.log`; after that only new or re-indexed books are recomputed.
+- **Opening books**: "Open in viewer" jumps to the page in Evince, Okular or Zathura (Linux), SumatraPDF (Windows; otherwise the default PDF app), or Preview (macOS; the page jump needs Accessibility permission for System Events, otherwise the book opens at the start). `PDF_VIEWER` / `EPUB_VIEWER` in `config.py` override the choice. "Show folder" opens the file manager with the book selected (macOS, Windows) or its folder (Linux).
 - **Book card**: indexed text page by page (arrow keys to turn pages), open in the system viewer or a browser tab at that page, and "nearby" books whose passages are closest to this one's.
 
-The catalog is read from Qdrant on the fly (one entry per `file_hash`) and rebuilt whenever the collection's point count changes, so new indexing shows up on reload. **Rescan** forces a rebuild. Cover thumbnails are cached in `~/.cache/knowledge_server/covers`. The server listens on 127.0.0.1 only.
+The catalog is read from Qdrant on the fly (one entry per `file_hash`) and rebuilt whenever the collection's point count changes, so new indexing shows up on reload. **Rescan** forces a rebuild. Cover thumbnails are cached in the same cache folder. The server listens on 127.0.0.1 only.
 
 ## Configuration
 

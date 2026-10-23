@@ -10,7 +10,9 @@ The catalog is derived live from the Qdrant collection (one entry per file_hash)
 and cross-checked against BOOKS_DIR on disk, so it follows whatever is indexed.
 It is cached in memory and rebuilt whenever the collection's point count changes.
 
-Run:  .venv/bin/python jorge.py [--port 8765] [--no-open]
+Run:     python jorge.py [--port 8765] [--no-open]   server in the foreground
+Launch:  python jorge.py --launch                  start it in the background if
+                                                   needed, open an app window, exit
 """
 
 import argparse
@@ -18,8 +20,10 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -47,7 +51,13 @@ EPUB_VIEWER = getattr(_config, "EPUB_VIEWER", None)
 JORGE_ICON = getattr(_config, "JORGE_ICON", None)
 BOOK_EXTS = {".pdf", ".epub"}
 HERE = Path(__file__).resolve().parent
-COVER_CACHE = Path(os.path.expanduser("~/.cache/knowledge_server/covers"))
+if platform.system() == "Windows":
+    CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "knowledge_server" / "Cache"
+elif platform.system() == "Darwin":
+    CACHE_DIR = Path(os.path.expanduser("~/Library/Caches/knowledge_server"))
+else:
+    CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")) / "knowledge_server"
+COVER_CACHE = CACHE_DIR / "covers"
 COVER_CACHE.mkdir(parents=True, exist_ok=True)
 
 _META_FIELDS = ["metadata.file_hash", "metadata.source_path", "metadata.source",
@@ -134,8 +144,8 @@ def _folder_of(path: str) -> str:
     except ValueError:
         rel = ".."
     if rel.startswith(".."):
-        return "~other/" + parent.strip("/")
-    return "" if rel == "." else rel
+        return "~other/" + parent.replace("\\", "/").replace(":", "").strip("/")
+    return "" if rel == "." else rel.replace(os.sep, "/")
 
 
 CATALOG = Catalog()
@@ -151,7 +161,7 @@ class BookMap:
     The first build reads every vector in the collection (~1.5 min for 240k).
     """
     K = 6
-    CACHE = Path(os.path.expanduser("~/.cache/knowledge_server/book_vectors.npz"))
+    CACHE = CACHE_DIR / "book_vectors.npz"
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -438,28 +448,80 @@ async def api_open(request: Request):
     if not os.path.exists(d["path"]):
         return JSONResponse({"error": "file missing on disk"}, status_code=404)
     if body.get("reveal"):
-        subprocess.Popen(["xdg-open", os.path.dirname(d["path"])])
+        _reveal(d["path"])
     else:
         _open_in_viewer(d["path"], int(body.get("page") or 1))
     return JSONResponse({"ok": True})
 
 
+SYSTEM = platform.system()   # "Linux", "Darwin" or "Windows"
+
+
+def _open_default(path: str):
+    """Open a file or folder with the system's default application."""
+    if SYSTEM == "Windows":
+        os.startfile(path)
+    elif SYSTEM == "Darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
+def _reveal(path: str):
+    """Show the file in the system file manager, selected where the platform allows."""
+    if SYSTEM == "Windows":
+        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+    elif SYSTEM == "Darwin":
+        subprocess.Popen(["open", "-R", path])
+    else:
+        subprocess.Popen(["xdg-open", os.path.dirname(path)])
+
+
+def _sumatra():
+    found = shutil.which("SumatraPDF")
+    if found:
+        return found
+    for base in (os.environ.get("LOCALAPPDATA"), os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+        if base and os.path.exists(os.path.join(base, "SumatraPDF", "SumatraPDF.exe")):
+            return os.path.join(base, "SumatraPDF", "SumatraPDF.exe")
+    return None
+
+
 def _open_in_viewer(path: str, page: int):
+    """Open a book in a desktop viewer, at `page` where the viewer supports it."""
     if path.lower().endswith(".epub"):
-        viewer = EPUB_VIEWER if EPUB_VIEWER and shutil.which(EPUB_VIEWER) else "xdg-open"
-        subprocess.Popen([viewer, path])
+        if EPUB_VIEWER and shutil.which(EPUB_VIEWER):
+            subprocess.Popen([EPUB_VIEWER, path])
+        else:
+            _open_default(path)
         return
     viewer = PDF_VIEWER if PDF_VIEWER and shutil.which(PDF_VIEWER) else None
-    if platform.system() == "Darwin":
-        subprocess.Popen(["open", path])
+    if SYSTEM == "Darwin":
+        if viewer:
+            subprocess.Popen(["open", "-a", viewer, path])
+        else:
+            script = (f'tell application "Preview" to open POSIX file "{path}"\n'
+                      f'delay 1\n'
+                      f'tell application "System Events" to tell process "Preview"\n'
+                      f'  keystroke "g" using {{option down, command down}}\n'
+                      f'  delay 0.3\n  keystroke "{page}"\n  key code 36\nend tell')
+            subprocess.Popen(["osascript", "-e", script])
+    elif SYSTEM == "Windows":
+        sumatra = _sumatra()
+        if sumatra:
+            subprocess.Popen([sumatra, "-reuse-instance", "-page", str(page), path])
+        else:
+            os.startfile(path)
     elif viewer == "evince" or (not viewer and shutil.which("evince")):
         subprocess.Popen(["evince", f"--page-index={page - 1}", path])
     elif viewer == "okular" or (not viewer and shutil.which("okular")):
         subprocess.Popen(["okular", "--page", str(page), path])
     elif viewer == "zathura" or (not viewer and shutil.which("zathura")):
         subprocess.Popen(["zathura", "--page", str(page - 1), path])
+    elif viewer:
+        subprocess.Popen([viewer, path])
     else:
-        subprocess.Popen([viewer or "xdg-open", path])
+        _open_default(path)
 
 
 def icon(request: Request):
@@ -489,15 +551,78 @@ app = Starlette(routes=[
 ])
 
 
+# ---------------------------------------------------------------- launcher
+
+def _chromium():
+    """A Chromium-family browser that supports --app windows, or None."""
+    if SYSTEM == "Windows":
+        roots = [os.environ.get(k) for k in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
+        rels = [r"Google\Chrome\Application\chrome.exe", r"Microsoft\Edge\Application\msedge.exe",
+                r"BraveSoftware\Brave-Browser\Application\brave.exe", r"Chromium\Application\chrome.exe"]
+        candidates = [os.path.join(r, rel) for rel in rels for r in roots if r]
+    elif SYSTEM == "Darwin":
+        apps = ["Google Chrome", "Microsoft Edge", "Brave Browser", "Chromium"]
+        candidates = [os.path.join(base, f"{a}.app", "Contents", "MacOS", a)
+                      for a in apps for base in ("/Applications", os.path.expanduser("~/Applications"))]
+    else:
+        candidates = [shutil.which(n) for n in ("google-chrome", "google-chrome-stable", "chromium",
+                                                  "chromium-browser", "microsoft-edge", "brave-browser")]
+    return next((c for c in candidates if c and os.path.exists(c)), None)
+
+
+def open_window(url: str):
+    """Open Jorge in its own app window if a Chromium browser is around, else a browser tab."""
+    browser = _chromium()
+    if browser:
+        subprocess.Popen([browser, f"--app={url}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        webbrowser.open(url)
+
+
+def _is_up(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=1):
+            return True
+    except Exception:
+        return False
+
+
+def launch(port: int):
+    """Start the server in the background unless it is already running, then open a window."""
+    url = f"http://127.0.0.1:{port}/"
+    if not _is_up(url):
+        log = open(CACHE_DIR / "jorge.log", "a")
+        python = sys.executable
+        kwargs = {}
+        if SYSTEM == "Windows":
+            pythonw = os.path.join(os.path.dirname(python), "pythonw.exe")
+            python = pythonw if os.path.exists(pythonw) else python
+            kwargs["creationflags"] = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                                       | subprocess.CREATE_NO_WINDOW)
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen([python, str(Path(__file__).resolve()), "--port", str(port), "--no-open"],
+                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, cwd=str(HERE), **kwargs)
+        for _ in range(60):
+            if _is_up(url):
+                break
+            time.sleep(0.25)
+    open_window(url)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=int, default=int(os.environ.get("JORGE_PORT", 8765)))
     ap.add_argument("--no-open", action="store_true", help="don't open a browser window")
+    ap.add_argument("--launch", action="store_true",
+                    help="start the server in the background if needed, open an app window and exit")
     args = ap.parse_args()
+    if args.launch:
+        return launch(args.port)
     url = f"http://127.0.0.1:{args.port}/"
     if not args.no_open:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-    print(f"Library browser on {url}")
+        threading.Timer(1.0, lambda: open_window(url)).start()
+    print(f"Jorge on {url}")
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
 
 
