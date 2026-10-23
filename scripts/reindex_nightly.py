@@ -37,6 +37,8 @@ def parse_args():
     parser.add_argument("--until", default="08:00", help="Window end (HH:MM): no new book is started after it")
     parser.add_argument("--status", action="store_true", help="Print progress and exit")
     parser.add_argument("--books-dir", help="Library root (default: BOOKS_DIR from config.py)")
+    parser.add_argument("--sync-titles", action="store_true",
+                        help="Copy current titles from the live collection onto every finished book, then exit")
     return parser.parse_args()
 
 
@@ -56,22 +58,16 @@ def window_deadline(start: str, until: str):
     return end if now < end else None
 
 
-def load_live_titles(client, models) -> dict:
-    """file_hash -> curated title fields from the live collection. Titles there were
-    rewritten after indexing (fix_titles.py, add_book.py), so they are carried over
-    instead of re-derived."""
-    fields = ["metadata.file_hash", "metadata.document_title", "metadata.document_title_original"]
-    titles, offset = {}, None
-    while True:
-        pts, offset = client.scroll(LIVE_COLLECTION, limit=5000, offset=offset,
-                                    with_payload=models.PayloadSelectorInclude(include=fields), with_vectors=False)
-        for p in pts:
-            meta = (p.payload or {}).get("metadata", {})
-            h = meta.get("file_hash")
-            if h and h not in titles and meta.get("document_title"):
-                titles[h] = {k: meta[k] for k in ("document_title", "document_title_original") if meta.get(k)}
-        if offset is None:
-            return titles
+def live_title(client, models, file_hash) -> dict:
+    """Curated title fields for a book in the live collection (titles there were
+    rewritten after indexing by fix_titles.py, add_book.py or by hand), or {}.
+    Read at the moment of use, so edits made during the re-index carry over."""
+    pts, _ = client.scroll(LIVE_COLLECTION, limit=1, with_vectors=False,
+                           scroll_filter=models.Filter(must=[models.FieldCondition(
+                               key="metadata.file_hash", match=models.MatchValue(value=file_hash))]),
+                           with_payload=["metadata.document_title", "metadata.document_title_original"])
+    meta = pts[0].payload.get("metadata", {}) if pts else {}
+    return {k: meta[k] for k in ("document_title", "document_title_original") if meta.get(k)}
 
 
 def main():
@@ -127,10 +123,8 @@ def main():
         print(f"{dt.datetime.now():%Y-%m-%d %H:%M} Another re-index run is active, exiting.", flush=True)
         return
 
-    live_titles = load_live_titles(db.client, models)
-
     def apply_title(file_hash, rel):
-        fields = live_titles.get(file_hash) or {"document_title": title_from_filename(rel)}
+        fields = live_title(db.client, models, file_hash) or {"document_title": title_from_filename(rel)}
         db.client.set_payload(collection_name=args.collection, payload=fields, key="metadata", wait=True,
                               points=models.Filter(must=[models.FieldCondition(
                                   key="metadata.file_hash", match=models.MatchValue(value=file_hash))]))
@@ -138,13 +132,15 @@ def main():
 
     done.pop("", None)  # left by older runs for files that vanished mid-run
 
-    # Books finished before titles were carried over.
-    untitled = [h for h, d in done.items() if d["chunks"] and not d.get("titled")]
+    # Books finished before titles were carried over (or all of them, with --sync-titles).
+    untitled = [h for h, d in done.items() if d["chunks"] and (args.sync_titles or not d.get("titled"))]
     for h in untitled:
         apply_title(h, done[h]["path"])
     if untitled:
         save_done()
         print(f"Set titles on {len(untitled)} earlier books", flush=True)
+    if args.sync_titles:
+        return
 
     # Drop books left half-written by an interrupted run.
     for file_hash in db.get_all_indexed_hashes() - set(done):
