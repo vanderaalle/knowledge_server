@@ -466,6 +466,37 @@ To put Jorge in your app menu or dock, make a shortcut that runs `jorge.py --lau
 
 The catalog is read from Qdrant on the fly (one entry per `file_hash`) and rebuilt whenever the collection's point count changes, so new indexing shows up on reload. **Rescan** forces a rebuild. Cover thumbnails are cached in the same cache folder. The server listens on 127.0.0.1 only.
 
+### How Jorge is built
+
+Two files, no build step, and no dependencies beyond what the knowledge server already installs (Starlette, uvicorn, numpy, PyMuPDF, the Qdrant client):
+
+| | What it does |
+|---|---|
+| **`jorge.py`** (~630 lines of Python) | A small Starlette server on `127.0.0.1:8765`. It owns everything that touches data: the catalog, searches (query embeddings through Ollama), the per-book vectors and map geometry, cover thumbnails, serving files, opening books in a desktop viewer, and the `--launch` launcher. |
+| **`jorge_static/index.html`** (~880 lines) | The whole interface in one page: CSS for layout and light/dark themes, and plain JavaScript (no framework) for shelves, covers, search, the book card and the Aedificium. The only outside library is [d3](https://d3js.org/) for the force layout, zoom and hit-testing; the map itself is drawn by hand on a `<canvas>`. |
+
+Jorge has no database of its own: the page asks the server for JSON, and the server reads the same Qdrant collection the MCP server maintains.
+
+```
+browser (index.html)  ──JSON──▶  jorge.py  ──▶  Qdrant  (passages, vectors, metadata)
+                                    │       ──▶  Ollama  (query embeddings)
+                                    └──────▶  ~/Books   (files, covers, unindexed check)
+```
+
+**Catalog.** Qdrant stores passages, not books. Jorge reads only the metadata of every passage (about 4 s for 240k), groups it by `file_hash` into one entry per book, and compares it with the files under `BOOKS_DIR`. The catalog is kept in memory and rebuilt whenever the collection's point count changes.
+
+**Search.** *Concepts* and *Exact words* are the same vector and full-text searches as `query_library` and `search_text`. *Book topics* takes the 600 passages closest to the query, groups them by book and scores each book on its five best passages, weighted 1, 0.6, 0.4, 0.3, 0.2.
+
+**Book card.** The page reader joins a page's passages and trims the ~200-character overlap between neighbours. *Nearby on other shelves* takes 12 passages spread through the book, asks Qdrant for each one's nearest passages in other books (using stored vectors, no new embeddings) and sums the scores per book. Covers are page 1 rendered with PyMuPDF and cached as JPEGs.
+
+**Aedificium.** The work is split between the two files:
+
+1. *Server (numpy):* each book's vector is the mean of its passage vectors, cached in `book_vectors.npz` and recomputed only for new or re-indexed books. The direction shared by all books is subtracted, each book is linked to its 6 nearest neighbours, and PCA gives starting positions. The browser receives ~1,200 points and their links.
+2. *Browser (d3 + canvas):* a force simulation (links attract, books repel) runs 320 steps before the first frame, so the map opens already settled. A quadtree finds the dot under the cursor.
+3. *Region labels (browser):* k-means on the laid-out positions gives ~12 broad areas and ~40 neighbourhoods. A neighbourhood is named by title words and word pairs that are frequent in it but rare in the library and in other regions (TF-IDF at two levels); a broad area takes the leading names of the neighbourhoods inside it.
+
+**Launcher.** `jorge.py --launch` starts the server as a detached background process if it is not already answering, then opens a Chromium-family browser in `--app` mode (no tabs or address bar), falling back to the default browser.
+
 ## Configuration
 
 On a new machine, copy the templates and edit for your setup:
