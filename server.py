@@ -20,6 +20,9 @@ sys.stderr = open(os.devnull, 'w')
 import time
 import hashlib
 import concurrent.futures
+import functools
+import multiprocessing
+import threading
 import platform
 import shutil
 from pathlib import Path
@@ -33,6 +36,7 @@ import ollama
 from qdrant_client.models import PointStruct
 from mcp.server.fastmcp import FastMCP
 from tqdm import tqdm
+import anyio.to_thread
 import requests
 from bs4 import BeautifulSoup
 
@@ -49,6 +53,23 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
 ANNAS_URLS = ["https://annas-archive.gl", "https://annas-archive.se", "https://annas-archive.org", "https://annas-archive.li"]
 
 mcp = FastMCP("knowledge-server-optimized")
+
+# Only one indexing job may run at a time: a second request waits here instead
+# of competing for CPU/Ollama. Re-entrant so reindex_with_ocr can hold it across
+# its delete + re-index.
+_INDEX_LOCK = threading.RLock()
+
+# Worker processes are spawned, not forked: forking the threaded MCP server can
+# copy a held lock into a child, which then blocks forever on a futex.
+_SPAWN_CTX = multiprocessing.get_context("spawn")
+
+
+def _in_thread(fn):
+    """Run a blocking tool in a worker thread so the event loop stays responsive."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+    return wrapper
 
 # Cache of file hashes known to have no extractable text — persisted to disk
 # so index_library skips them instantly on future runs without opening the file.
@@ -123,7 +144,13 @@ def _get_annas_response(endpoint: str, params: dict = None, stream: bool = False
     raise last_error
 
 
-def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_all: bool = False, file_list: list = None) -> tuple:
+def _index_directory(*args, **kwargs) -> tuple:
+    """Serialized entry point for indexing; see _index_directory_unlocked."""
+    with _INDEX_LOCK:
+        return _index_directory_unlocked(*args, **kwargs)
+
+
+def _index_directory_unlocked(directory_path: str = None, use_ocr: bool = False, delete_all: bool = False, file_list: list = None) -> tuple:
     """
     Core indexing function. Parses PDFs in parallel (ProcessPool), then
     embeds and upserts in the main thread with incremental Qdrant writes.
@@ -157,7 +184,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
     force_ocr_hashes = _load_force_ocr_hashes()
     worker_args = [(p, directory_path, use_ocr, indexed_hashes, empty_hashes, force_ocr_hashes) for p in all_pdfs]
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, initializer=_worker_init) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=min(MAX_WORKERS, total_pdfs), mp_context=_SPAWN_CTX, initializer=_worker_init) as executor:
         futures = {executor.submit(_process_single_pdf, arg): arg[0] for arg in worker_args}
 
         for future in tqdm(concurrent.futures.as_completed(futures), total=total_pdfs, desc="Parsing PDFs", unit="file"):
@@ -254,6 +281,7 @@ def _index_directory(directory_path: str = None, use_ocr: bool = False, delete_a
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_in_thread
 def index_library(path: str, delete_all: bool = False) -> str:
     """Index PDFs in parallel, quickly."""
     if not path:
@@ -277,6 +305,7 @@ def index_library(path: str, delete_all: bool = False) -> str:
 
 
 @mcp.tool()
+@_in_thread
 def index_single_pdf(file_path: str) -> str:
     """Index a single PDF (with OCR if needed)."""
     if not file_path:
@@ -295,6 +324,7 @@ def index_single_pdf(file_path: str) -> str:
 
 
 @mcp.tool()
+@_in_thread
 def index_with_ocr(path: str) -> str:
     """Index with OCR (slow but accurate for scans)."""
     if not path:
@@ -307,6 +337,7 @@ def index_with_ocr(path: str) -> str:
 
 
 @mcp.tool()
+@_in_thread
 def reindex_with_ocr(file_path: str) -> str:
     """Re-index one PDF by OCR'ing every page, replacing its existing chunks.
     Use when a PDF's text layer is garbled (search returns gibberish for it).
@@ -316,8 +347,9 @@ def reindex_with_ocr(file_path: str) -> str:
     try:
         file_hash = _calculate_file_hash(Path(file_path))
         _add_force_ocr_hash(file_hash)
-        get_db().delete_by_file(file_hash)
-        indexed, _, errors, _ = _index_directory(file_list=[file_path], use_ocr=True)
+        with _INDEX_LOCK:
+            get_db().delete_by_file(file_hash)
+            indexed, _, errors, _ = _index_directory(file_list=[file_path], use_ocr=True)
         if indexed:
             return f"✅ Re-indexed with OCR: {file_path}"
         return f"⚠️  OCR produced no text for: {file_path} (errors: {errors})"
