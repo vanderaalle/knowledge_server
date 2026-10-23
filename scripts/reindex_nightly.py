@@ -26,6 +26,7 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LIVE_COLLECTION = "pdf_library"
 STATE_DIR = os.path.expanduser("~/.local/share/knowledge_server")
 
 
@@ -55,6 +56,24 @@ def window_deadline(start: str, until: str):
     return end if now < end else None
 
 
+def load_live_titles(client, models) -> dict:
+    """file_hash -> curated title fields from the live collection. Titles there were
+    rewritten after indexing (fix_titles.py, add_book.py), so they are carried over
+    instead of re-derived."""
+    fields = ["metadata.file_hash", "metadata.document_title", "metadata.document_title_original"]
+    titles, offset = {}, None
+    while True:
+        pts, offset = client.scroll(LIVE_COLLECTION, limit=5000, offset=offset,
+                                    with_payload=models.PayloadSelectorInclude(include=fields), with_vectors=False)
+        for p in pts:
+            meta = (p.payload or {}).get("metadata", {})
+            h = meta.get("file_hash")
+            if h and h not in titles and meta.get("document_title"):
+                titles[h] = {k: meta[k] for k in ("document_title", "document_title_original") if meta.get(k)}
+        if offset is None:
+            return titles
+
+
 def main():
     args = parse_args()
     if args.collection == "pdf_library":
@@ -67,6 +86,8 @@ def main():
     from pdf_processor import _calculate_file_hash
     from vector_db import get_db
     from qdrant_client import models
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    from add_book import title_from_filename
     from pathlib import Path
 
     try:
@@ -106,6 +127,23 @@ def main():
         print(f"{dt.datetime.now():%Y-%m-%d %H:%M} Another re-index run is active, exiting.", flush=True)
         return
 
+    live_titles = load_live_titles(db.client, models)
+
+    def apply_title(file_hash, rel):
+        fields = live_titles.get(file_hash) or {"document_title": title_from_filename(rel)}
+        db.client.set_payload(collection_name=args.collection, payload=fields, key="metadata", wait=True,
+                              points=models.Filter(must=[models.FieldCondition(
+                                  key="metadata.file_hash", match=models.MatchValue(value=file_hash))]))
+        done[file_hash]["titled"] = True
+
+    # Books finished before titles were carried over.
+    untitled = [h for h, d in done.items() if d["chunks"] and not d.get("titled")]
+    for h in untitled:
+        apply_title(h, done[h]["path"])
+    if untitled:
+        save_done()
+        print(f"Set titles on {len(untitled)} earlier books", flush=True)
+
     # Drop books left half-written by an interrupted run.
     for file_hash in db.get_all_indexed_hashes() - set(done):
         print(f"Removing partial book {file_hash}", flush=True)
@@ -143,6 +181,8 @@ def main():
             must=[models.FieldCondition(key="metadata.file_hash", match=models.MatchValue(value=file_hash))]
         )).count if indexed else 0
         done[file_hash] = {"path": rel, "chunks": chunks, "at": dt.datetime.now().isoformat(timespec="seconds")}
+        if chunks:
+            apply_title(file_hash, rel)
         save_done()
         run_files += 1
         run_chunks += chunks

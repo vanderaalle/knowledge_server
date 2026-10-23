@@ -10,6 +10,7 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     import fitz  # PyMuPDF
@@ -37,6 +38,8 @@ TESSERACT_CMD = os.getenv('TESSERACT_CMD', '/opt/homebrew/bin/tesseract')
 _poppler_default = '/opt/homebrew/bin'
 POPPLER_PATH = os.getenv('POPPLER_PATH', _poppler_default if os.path.exists(_poppler_default) else None)
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', os.cpu_count() or 4))
+# Pages OCR'd at once. Each runs its own tesseract process, so threads suffice.
+OCR_THREADS = int(os.getenv('OCR_THREADS', max(1, (os.cpu_count() or 4) // 2)))
 
 if os.path.exists(TESSERACT_CMD):
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
@@ -128,10 +131,27 @@ class PDFProcessor:
     def __init__(self):
         self.text_splitter = SimpleTextSplitter(chunk_size=800, chunk_overlap=150)
 
+    def _ocr_page(self, pdf_path: str, page_number: int, dpi: int) -> str:
+        """Render one page (1-based) and OCR it; only that page is held in memory."""
+        images = convert_from_path(pdf_path, dpi=dpi, first_page=page_number,
+                                   last_page=page_number, poppler_path=POPPLER_PATH)
+        return pytesseract.image_to_string(images[0]) if images else ""
+
+    def _ocr_pages(self, pdf_path: str, page_numbers: List[int], dpi: int) -> Dict[int, str]:
+        """OCR several pages in parallel; a page that fails yields ""."""
+        def ocr(n):
+            try:
+                return self._ocr_page(pdf_path, n, dpi)
+            except Exception:
+                return ""
+        with ThreadPoolExecutor(max_workers=OCR_THREADS) as pool:
+            return dict(zip(page_numbers, pool.map(ocr, page_numbers)))
+
     def _ocr_all_pages(self, pdf_path: str) -> tuple:
         """OCR every page, ignoring any embedded text layer."""
-        images = convert_from_path(pdf_path, dpi=300, poppler_path=POPPLER_PATH)
-        page_texts = [pytesseract.image_to_string(img) for img in images]
+        total = len(PdfReader(pdf_path).pages)
+        texts = self._ocr_pages(pdf_path, list(range(1, total + 1)), dpi=300)
+        page_texts = [texts[n] for n in range(1, total + 1)]
         return "\n".join(page_texts) + "\n", page_texts, len(page_texts), True
 
     def extract_text_from_pdf(self, pdf_path: str, use_ocr: bool = False, force_ocr: bool = False) -> tuple:
@@ -159,20 +179,14 @@ class PDFProcessor:
             if not full_text.strip() and use_ocr:
                 try:
                     reader = PdfReader(pdf_path)
-                    page_texts = []
-                    full_text = ""
-                    for i, page in enumerate(reader.pages):
-                        page_text = page.extract_text() or ""
-                        if not page_text.strip():
-                            try:
-                                images = convert_from_path(pdf_path, first_page=i+1, last_page=i+1, poppler_path=POPPLER_PATH)
-                                if images:
-                                    page_text = pytesseract.image_to_string(images[0])
-                                    used_ocr = True
-                            except:
-                                page_text = ""
-                        page_texts.append(page_text)
-                        full_text += page_text + "\n"
+                    page_texts = [page.extract_text() or "" for page in reader.pages]
+                    blank = [i + 1 for i, t in enumerate(page_texts) if not t.strip()]
+                    if blank:
+                        # pdf2image's default resolution (200 dpi), as before.
+                        for n, text in self._ocr_pages(pdf_path, blank, dpi=200).items():
+                            page_texts[n - 1] = text
+                        used_ocr = True
+                    full_text = "".join(t + "\n" for t in page_texts)
                 except Exception:
                     pass
 
