@@ -13,3 +13,6 @@ FORCE_OCR_LIST = "~/.local/share/knowledge_server/force_ocr.json"
 # Viewers — set to None to use system default (xdg-open)
 PDF_VIEWER = "evince"       # e.g. "evince", "okular", "zathura", None
 EPUB_VIEWER = "foliate"     # e.g. "foliate", "ebook-viewer", None
+
+# Jorge (library browser) icon — a PNG/SVG path, or None for the bundled drawing
+JORGE_ICON = None
