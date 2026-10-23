@@ -136,6 +136,8 @@ def main():
                                   key="metadata.file_hash", match=models.MatchValue(value=file_hash))]))
         done[file_hash]["titled"] = True
 
+    done.pop("", None)  # left by older runs for files that vanished mid-run
+
     # Books finished before titles were carried over.
     untitled = [h for h, d in done.items() if d["chunks"] and not d.get("titled")]
     for h in untitled:
@@ -162,8 +164,10 @@ def main():
         if dt.datetime.now() >= deadline:
             print("Window closed, stopping before next book.", flush=True)
             break
+        if not path.exists():
+            continue  # moved or deleted since the run started; picked up at its new path next run
         file_hash = _calculate_file_hash(path)
-        if file_hash in done:
+        if not file_hash or file_hash in done:
             continue
         rel = os.path.relpath(path, books_dir)
         t0 = time.time()
