@@ -93,10 +93,14 @@ def check(src: str, dest: str, args) -> list:
 
 def index_and_finish(path: str, args) -> bool:
     """Index one file in place, set its title, verify. True on success."""
-    from server import _index_directory, _add_force_ocr_hash
+    from server import _index_directory, _add_force_ocr_hash, _forget_empty_hash
     h = _calculate_file_hash(Path(path))
     if args.force_ocr:
         _add_force_ocr_hash(h)
+    # An earlier attempt may have found no text (e.g. an OCR failure) and cached that,
+    # which makes every indexer skip the file. Adding a book explicitly retries it.
+    if _forget_empty_hash(h):
+        print("  (was cached as 'no text' by an earlier attempt: retrying)")
     indexed, skipped, errors, _ = _index_directory(directory_path=BOOKS_DIR, file_list=[path], use_ocr=True)
     if not indexed:
         print(f"  ❌ Not indexed (skipped={skipped}, errors={errors}): no extractable text?")

@@ -152,6 +152,17 @@ def _save_empty_hash(file_hash: str):
     except Exception:
         pass
 
+
+def _forget_empty_hash(file_hash: str) -> bool:
+    """Drop a hash from the no-text cache so the file is tried again. True if it was there."""
+    hashes = _load_empty_hashes()
+    if file_hash not in hashes:
+        return False
+    hashes.discard(file_hash)
+    with open(_EMPTY_HASH_CACHE_PATH, "w") as f:
+        json.dump(list(hashes), f)
+    return True
+
 # File hashes that must always be OCR'd, even though they have a text layer
 # (garbled font encodings). Keyed by hash so the entry survives renames/moves.
 try:
