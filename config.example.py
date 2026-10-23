@@ -14,5 +14,5 @@ FORCE_OCR_LIST = "~/.local/share/knowledge_server/force_ocr.json"
 PDF_VIEWER = "evince"       # e.g. "evince", "okular", "zathura", None
 EPUB_VIEWER = "foliate"     # e.g. "foliate", "ebook-viewer", None
 
-# Jorge (library browser) icon — a PNG/SVG path, or None for the bundled drawing
+# Jorge (library browser) icon — a PNG/SVG path, or None for the bundled one
 JORGE_ICON = None

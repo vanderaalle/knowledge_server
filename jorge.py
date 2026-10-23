@@ -43,7 +43,7 @@ except ImportError:
 BOOKS_DIR = os.path.expanduser(getattr(_config, "BOOKS_DIR", None) or "~/Books")
 PDF_VIEWER = getattr(_config, "PDF_VIEWER", None)
 EPUB_VIEWER = getattr(_config, "EPUB_VIEWER", None)
-# Optional personal icon (e.g. an image you own); defaults to the bundled drawing.
+# Optional personal icon; defaults to the bundled jorge.png (Eco's plan of the Aedificium).
 JORGE_ICON = getattr(_config, "JORGE_ICON", None)
 BOOK_EXTS = {".pdf", ".epub"}
 HERE = Path(__file__).resolve().parent
@@ -465,7 +465,7 @@ def _open_in_viewer(path: str, page: int):
 def icon(request: Request):
     if JORGE_ICON and os.path.exists(os.path.expanduser(JORGE_ICON)):
         return FileResponse(os.path.expanduser(JORGE_ICON), headers={"Cache-Control": "no-cache"})
-    return FileResponse(HERE / "jorge_static" / "jorge.svg", headers={"Cache-Control": "no-cache"})
+    return FileResponse(HERE / "jorge_static" / "jorge.png", headers={"Cache-Control": "no-cache"})
 
 
 async def index(request: Request):
