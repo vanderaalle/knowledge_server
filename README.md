@@ -479,8 +479,8 @@ Jorge has no database of its own: the page asks the server for JSON, and the ser
 
 ```
 browser (index.html)  ──JSON──▶  jorge.py  ──▶  Qdrant  (passages, vectors, metadata)
-                                    │       ──▶  Ollama  (query embeddings)
-                                    └──────▶  ~/Books   (files, covers, unindexed check)
+                                    │      ──▶  Ollama  (query embeddings)
+                                    └────────▶  ~/Books   (files, covers, unindexed check)
 ```
 
 **Catalog.** Qdrant stores passages, not books. Jorge reads only the metadata of every passage (about 4 s for 240k), groups it by `file_hash` into one entry per book, and compares it with the files under `BOOKS_DIR`. The catalog is kept in memory and rebuilt whenever the collection's point count changes.
