@@ -16,6 +16,7 @@ Launch:  python jorge.py --launch                  start it in the background if
 """
 
 import argparse
+import concurrent.futures
 import os
 import platform
 import shutil
@@ -314,20 +315,63 @@ def api_search(request: Request):
     client = get_db().client
 
     if mode == "text":
-        conds = [models.FieldCondition(key="text", match=models.MatchText(text=q))]
-        if flt:
-            conds += flt.must
-        pts, _ = client.scroll(COLLECTION_NAME, scroll_filter=models.Filter(must=conds),
-                               limit=n, with_payload=True, with_vectors=False)
-        hits = [_hit(p.payload.get("metadata", {}), p.payload.get("text", ""), term=q) for p in pts]
-    elif mode == "books":
-        return JSONResponse({"books": _rank_books(client, q, flt, n)})
-    else:
-        vec = embed_query(q)
-        res = client.search(COLLECTION_NAME, query_vector=vec, query_filter=flt,
-                            limit=n, with_payload=True)
-        hits = [_hit(r.payload.get("metadata", {}), r.payload.get("text", ""), r.score) for r in res]
-    return JSONResponse({"hits": hits})
+        pts = _exact_points(client, q, flt, n)
+        return JSONResponse({"hits": [_hit(p.payload.get("metadata", {}), p.payload.get("text", ""), term=q)
+                                      for p in pts]})
+
+    # Semantic modes also look for the literal words, in parallel: embeddings are weak on
+    # names and coined terms, and the exact matches tell real hits from mere nearest neighbours.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        exact_job = pool.submit(_exact_points, client, q, flt, _EXACT_POOL)
+        if mode == "books":
+            books = _rank_books(client, q, flt, n)
+        else:
+            res = client.search(COLLECTION_NAME, query_vector=embed_query(q), query_filter=flt,
+                                limit=n, with_payload=True)
+        exact = exact_job.result()
+
+    by_book = {}
+    for p in exact:
+        meta = p.payload.get("metadata", {})
+        by_book.setdefault(meta.get("file_hash"), []).append(_hit(meta, p.payload.get("text", ""), term=q))
+    exact_counts = {h: len(v) for h, v in by_book.items()}
+
+    if mode == "books":
+        for b in books:
+            b["exact"] = exact_counts.get(b["hash"], 0)
+        found = {b["hash"] for b in books}
+        exact_only = sorted(({"hash": h, "exact": len(v), "hits": v[:2]} for h, v in by_book.items() if h not in found),
+                            key=lambda b: -b["exact"])[:20]
+        return JSONResponse({"books": books, "exact_only": exact_only,
+                             "best": _strength(max((b["best"] for b in books), default=0))})
+
+    hits = [_hit(r.payload.get("metadata", {}), r.payload.get("text", ""), r.score) for r in res]
+    for h in hits:
+        h["strength"] = _strength(h["score"])
+    return JSONResponse({"hits": hits, "exact": exact_counts,
+                         "best": _strength(max((h["score"] for h in hits), default=0))})
+
+
+# How close a passage must be to count as a real match. Calibrated on 2026-10-23 for
+# mxbai-embed-large with its query instruction: topics the library covers reach 0.78+
+# (e.g. "Xenakis stochastic music" 0.86, "Fluxus noise" 0.78); nonsense and absent
+# topics stay below ~0.72 ("asdf qwerty" 0.69, "tax law" 0.63). Re-check after a model change.
+STRONG_MATCH = 0.78
+POSSIBLE_MATCH = 0.72
+_EXACT_POOL = 300   # passages scanned for the literal words
+
+
+def _strength(score: float) -> str:
+    return "strong" if score >= STRONG_MATCH else "possible" if score >= POSSIBLE_MATCH else "weak"
+
+
+def _exact_points(client, q: str, flt, limit: int):
+    conds = [models.FieldCondition(key="text", match=models.MatchText(text=q))]
+    if flt:
+        conds += flt.must
+    pts, _ = client.scroll(COLLECTION_NAME, scroll_filter=models.Filter(must=conds),
+                           limit=limit, with_payload=True, with_vectors=False)
+    return pts
 
 
 # Weights for a book's best passages: one strong page counts, but a book that
@@ -350,6 +394,7 @@ def _rank_books(client, q: str, flt, n: int):
         score = sum(s * w for s, w in zip(top, _BOOK_WEIGHTS)) / sum(_BOOK_WEIGHTS)
         books.append({
             "hash": h, "score": score, "passages": len(rs),
+            "best": top[0], "strength": _strength(top[0]),
             "pages": sorted({m.get("page_number") for _, m in rs if m.get("page_number") is not None}),
             "hits": [_hit(m, r.payload.get("text", ""), r.score) for r, m in rs[:3]],
         })

@@ -130,6 +130,18 @@ table.list { width: 100%; border-collapse: collapse; }
 .hit .sc { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); margin-left: 6px; }
 mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
 
+.banner { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between;
+  border: 1px solid var(--rule); border-left: 3px solid var(--warn); background: var(--card); border-radius: 6px;
+  padding: 10px 14px; margin: 0 0 14px; font-size: 13px; }
+.banner.scope { border-left-color: var(--accent); }
+.banner p { margin: 0; min-width: 0; flex: 1 1 260px; }
+.chip.strong { border-color: var(--accent); color: var(--accent); }
+.chip.weak { border-style: dashed; }
+.chip.exact { border-color: var(--ink); color: var(--ink); }
+details.weaker { margin-top: 18px; }
+details.weaker > summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0; }
+.section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+  border-bottom: 1px solid var(--rule); padding-bottom: 4px; margin: 26px 0 0; }
 .empty { color: var(--muted); padding: 40px 0; text-align: center; }
 .loading { color: var(--muted); font-style: italic; padding: 24px 0; }
 
@@ -391,24 +403,68 @@ function renderUnindexed(c) {
     </tbody></table></div>`}`;
 }
 
+const STRENGTH = { strong: "Strong match", possible: "Possible match", weak: "Weak match" };
+function scopeNote() {
+  const f = S.results?.folder;
+  if (!f) return "";
+  return `<div class="banner scope"><p>Searched only the <b>${esc(folderLabel())}</b> shelf.</p>
+    <button class="iconbtn" id="searchall">Search the whole library</button></div>`;
+}
+function weakNote() {
+  const r = S.results;
+  if (!r || r.mode === "text" || r.best !== "weak") return "";
+  const n = r.mode === "books" ? r.exactOnly.length + r.books.filter(b => b.exact).length : Object.keys(r.exact).length;
+  return `<div class="banner"><p>Nothing ${r.folder ? "on this shelf" : "in the library"} is close to “${esc(r.q)}”.
+    The books below are only the nearest ones${n ? `; ${n} contain${n === 1 ? "s" : ""} the exact words` : ""}.</p>
+    <button class="iconbtn" id="tryexact">Search the exact words</button></div>`;
+}
+function bookResult(b, i, max) {
+  const d = S.byHash[b.hash] || { hash: b.hash, title: "Unknown document", folder: "", exists: false, pages: "?" };
+  const pages = b.pages.length > 8 ? b.pages.slice(0, 8).join(", ") + ` +${b.pages.length - 8}` : b.pages.join(", ");
+  return `<div class="result"><div data-hash="${b.hash}" data-page="${b.hits[0]?.page ?? ""}">${coverHTML(d)}</div><div>
+    <div class="rank"><span class="pg">#${i + 1}</span><div class="bar wide" title="relevance ${b.score.toFixed(3)}"><i style="width:${Math.round(100 * b.score / max)}%"></i></div>
+      <span class="chip ${b.strength}">${STRENGTH[b.strength]}</span>
+      ${b.exact ? `<span class="chip exact" title="Passages containing the exact words">contains the words ×${b.exact}</span>` : ""}
+      <span class="count">${b.passages} passage${b.passages===1?"":"s"} · pp. ${pages}</span></div>
+    <h3 data-hash="${b.hash}" data-page="${b.hits[0]?.page ?? ""}">${esc(d.title)}</h3>
+    <div class="where">${esc(d.folder.replace(/-/g, " ") || "Books")} · ${d.pages} pp</div>
+    ${b.hits.map(h => `<div class="hit" data-hash="${b.hash}" data-page="${h.page}">
+      <span class="pg">p. ${h.page}</span><span class="s">${esc(h.snippet)}<span class="sc">${h.score.toFixed(2)}</span></span></div>`).join("")}
+  </div></div>`;
+}
+function exactOnlySection(list, q) {
+  if (!list.length) return "";
+  return `<h2 class="section-title">Books containing the exact words “${esc(q)}”</h2>` + list.map(b => {
+    const d = S.byHash[b.hash] || { hash: b.hash, title: "Unknown document", folder: "", exists: false, pages: "?" };
+    return `<div class="result"><div data-hash="${b.hash}" data-page="${b.hits[0]?.page ?? ""}">${coverHTML(d)}</div><div>
+      <div class="rank"><span class="chip exact">contains the words ×${b.exact}</span></div>
+      <h3 data-hash="${b.hash}" data-page="${b.hits[0]?.page ?? ""}">${esc(d.title)}</h3>
+      <div class="where">${esc(d.folder.replace(/-/g, " ") || "Books")} · ${d.pages} pp</div>
+      ${b.hits.map(h => `<div class="hit" data-hash="${b.hash}" data-page="${h.page}">
+        <span class="pg">p. ${h.page}</span><span class="s">${markWords(h.snippet, q)}</span></div>`).join("")}
+    </div></div>`; }).join("");
+}
+function markWords(text, q) {
+  const re = new RegExp(esc(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  return esc(text).replace(re, m => `<mark>${m}</mark>`);
+}
+
 function renderBooks(c) {
-  const { books, q } = S.results;
+  const { books, q, exactOnly } = S.results;
   const max = Math.max(...books.map(b => b.score), 0.0001);
+  // Real matches first; weak ones are folded away unless they are all there is.
+  const good = books.filter(b => b.strength !== "weak"), weak = books.filter(b => b.strength === "weak");
+  const shown = good.length ? good : weak.slice(0, 10), folded = weak.slice(good.length ? 0 : 10);
   c.innerHTML = `<div class="crumbs"><div>
       <h1>Books about “${esc(q)}”</h1>
-      <div class="sub">${books.length} book${books.length===1?"":"s"}, ranked by how strongly and how often they touch the idea · ${esc(folderLabel())}</div></div>
+      <div class="sub">${good.length ? `${good.length} matching book${good.length===1?"":"s"}, ranked by how strongly and how often they touch the idea` : "No close matches"} · ${esc(folderLabel())}</div></div>
       <div class="viewctl"><button class="iconbtn" data-view="map">Show in the Aedificium</button><button class="iconbtn" id="clearsearch">Back to shelves</button></div></div>
-    ${!books.length ? `<div class="empty">Nothing found. Try different wording, or widen the shelf.</div>` :
-    books.map((b, i) => { const d = S.byHash[b.hash] || { hash: b.hash, title: "Unknown document", folder: "", exists: false, pages: "?" };
-      const pages = b.pages.length > 8 ? b.pages.slice(0, 8).join(", ") + ` +${b.pages.length - 8}` : b.pages.join(", ");
-      return `<div class="result"><div data-hash="${b.hash}" data-page="${b.hits[0]?.page ?? ""}">${coverHTML(d)}</div><div>
-        <div class="rank"><span class="pg">#${i + 1}</span><div class="bar wide" title="relevance ${b.score.toFixed(3)}"><i style="width:${Math.round(100 * b.score / max)}%"></i></div>
-          <span class="count">${b.passages} passage${b.passages===1?"":"s"} · pp. ${pages}</span></div>
-        <h3 data-hash="${b.hash}" data-page="${b.hits[0]?.page ?? ""}">${esc(d.title)}</h3>
-        <div class="where">${esc(d.folder.replace(/-/g, " ") || "Books")} · ${d.pages} pp</div>
-        ${b.hits.map(h => `<div class="hit" data-hash="${b.hash}" data-page="${h.page}">
-          <span class="pg">p. ${h.page}</span><span class="s">${esc(h.snippet)}<span class="sc">${h.score.toFixed(2)}</span></span></div>`).join("")}
-      </div></div>`; }).join("")}`;
+    ${scopeNote()}${weakNote()}
+    ${!books.length && !exactOnly.length ? `<div class="empty">Nothing found. Try different wording, or widen the shelf.</div>` :
+      shown.map((b, i) => bookResult(b, i, max)).join("")}
+    ${folded.length ? `<details class="weaker"><summary>${folded.length} ${good.length ? "weaker" : "more distant"} match${folded.length===1?"":"es"}, probably unrelated</summary>
+      ${folded.map((b, i) => bookResult(b, shown.length + i, max)).join("")}</details>` : ""}
+    ${exactOnlySection(exactOnly, q)}`;
 }
 
 function renderResults(c) {
@@ -421,9 +477,12 @@ function renderResults(c) {
       <h1>${mode === "text" ? "Exact words" : "Passages about"} “${esc(q)}”</h1>
       <div class="sub">${hits.length} passage${hits.length===1?"":"s"} in ${groups.size} book${groups.size===1?"":"s"} · ${esc(folderLabel())}</div></div>
       <div class="viewctl"><button class="iconbtn" data-view="map">Show in the Aedificium</button><button class="iconbtn" id="clearsearch">Back to shelves</button></div></div>
+    ${scopeNote()}${weakNote()}
     ${!hits.length ? `<div class="empty">Nothing found. ${mode === "text" ? "Exact search matches whole words; try Concepts for related ideas." : "Try different wording, or widen the shelf."}</div>` :
     [...groups].map(([hash, hs]) => { const d = S.byHash[hash] || { hash, title: "Unknown document", folder: "", exists: false };
       return `<div class="result"><div data-hash="${hash}">${coverHTML(d)}</div><div>
+        ${mode !== "text" ? `<div class="rank"><span class="chip ${hs[0].strength}">${STRENGTH[hs[0].strength]}</span>
+          ${S.results.exact[hash] ? `<span class="chip exact">contains the words ×${S.results.exact[hash]}</span>` : ""}</div>` : ""}
         <h3 data-hash="${hash}">${esc(d.title)}</h3>
         <div class="where">${esc(d.folder.replace(/-/g, " ") || "Books")} · ${d.pages ?? "?"} pp</div>
         ${hs.sort((a, b) => a.page - b.page).map(h => `<div class="hit" data-hash="${hash}" data-page="${h.page}">
@@ -433,6 +492,8 @@ function renderResults(c) {
 
 $("#center").addEventListener("click", e => {
   if (e.target.closest("#clearsearch")) { S.results = null; S.q = ""; $("#q").value = ""; setMode("titles"); return; }
+  if (e.target.closest("#searchall")) { S.folder = ""; store.set("folder", ""); renderTree(); runSearch(); return; }
+  if (e.target.closest("#tryexact")) { setMode("text"); return; }
   const v = e.target.closest("[data-view]");
   if (v) { S.view = v.dataset.view; if (S.view !== "map" || !S.results) store.set("view", S.view); return render(); }
   const cp = e.target.closest("[data-copy]");
@@ -542,13 +603,19 @@ function mapHighlight() {
   // hash -> weight in (0, 1]; null when nothing is being searched
   if (S.mode !== "titles" && S.results) {
     const w = new Map();
-    if (S.results.mode === "books") {
-      const max = Math.max(...S.results.books.map(b => b.score), 1e-6);
-      S.results.books.forEach(b => w.set(b.hash, b.score / max));
+    const r = S.results;
+    if (r.mode === "books") {
+      const good = r.books.filter(b => b.strength !== "weak");
+      const max = Math.max(...good.map(b => b.score), 1e-6);
+      good.forEach(b => w.set(b.hash, b.score / max));
+      [...r.exactOnly, ...r.books.filter(b => b.exact && !w.has(b.hash))].forEach(b => w.set(b.hash, 0.35));
+    } else if (r.mode === "text") {
+      for (const h of r.hits) w.set(h.hash, 1);
     } else {
-      for (const h of S.results.hits) w.set(h.hash, Math.max(w.get(h.hash) || 0, h.score ?? 1));
+      for (const h of r.hits) if (h.strength !== "weak") w.set(h.hash, Math.max(w.get(h.hash) || 0, h.score));
       const max = Math.max(...w.values(), 1e-6);
       for (const [k, v] of w) w.set(k, v / max);
+      for (const k of Object.keys(r.exact)) if (!w.has(k)) w.set(k, 0.35);
     }
     return w;
   }
@@ -564,7 +631,7 @@ async function renderMap(c) {
   const title = S.results && S.mode !== "titles"
     ? (S.results.mode === "books" ? "Books about" : S.results.mode === "text" ? "Exact words" : "Passages about") + ` “${esc(S.results.q)}”`
     : "Aedificium";
-  const sub = hl ? `${hl.size} book${hl.size === 1 ? "" : "s"} lit up · ` : "";
+  const sub = hl ? `${hl.size || "No"} book${hl.size === 1 ? "" : "s"} lit up · ` : "";
   c.innerHTML = `<div class="crumbs"><div><h1>${title}</h1>
       <div class="sub">${sub}Books sit near books whose text is about similar things. Scroll to zoom, drag to pan, click a book to open it.</div></div>
       <div class="viewctl">${S.results && S.mode !== "titles" ? `<button class="iconbtn" data-view="list">Back to results</button>` : `
@@ -572,6 +639,7 @@ async function renderMap(c) {
           <button type="button" data-view="grid" aria-pressed="false">Covers</button>
           <button type="button" data-view="list" aria-pressed="false">List</button>
           <button type="button" data-view="map" aria-pressed="true">Aedificium</button></div>`}</div></div>
+    ${S.results && S.mode !== "titles" ? scopeNote() + weakNote() : ""}
     <div class="mapwrap" id="mapwrap"><div class="loading" style="text-align:center;padding-top:120px">Entering the Aedificium…</div></div>`;
   if (!M.data) {
     const r = await api("/api/map").catch(e => ({ status: "error", error: e.message }));
@@ -769,8 +837,9 @@ async function runSearch() {
   $("#center").innerHTML = `<div class="loading">${({ text: "Scanning every passage for those words…", books: "Weighing every book against that idea…" })[S.mode] ?? "Searching for related passages…"}</div>`;
   try {
     const r = await api(`/api/search?mode=${S.mode}&n=60&q=${encodeURIComponent(S.q)}&folder=${encodeURIComponent(folder)}`);
-    S.results = { hits: r.hits || [], books: r.books || [], q: S.q, mode: S.mode };
-  } catch (err) { S.results = { hits: [], books: [], q: S.q, mode: S.mode }; toast("Search failed: " + err.message); }
+    S.results = { hits: r.hits || [], books: r.books || [], exactOnly: r.exact_only || [], exact: r.exact || {},
+                  best: r.best, q: S.q, mode: S.mode, folder };
+  } catch (err) { S.results = { hits: [], books: [], exactOnly: [], exact: {}, q: S.q, mode: S.mode, folder }; toast("Search failed: " + err.message); }
   render();
 }
 
