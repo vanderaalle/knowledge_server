@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Knowledge Base MCP Server
-Multi-threaded PDF indexing, vector search, and Anna's Archive integration.
+Multi-threaded PDF indexing and vector search.
 """
 
 import os
