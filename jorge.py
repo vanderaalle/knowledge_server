@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-Library Browser — a local web UI to explore the indexed library.
+Jorge — a local web UI to explore the indexed library.
+
+Named for Jorge Luis Borges (The Library of Babel) and Jorge of Burgos, the blind
+librarian of the Aedificium in Eco's The Name of the Rose. Unlike him, this one
+shows you every book.
 
 The catalog is derived live from the Qdrant collection (one entry per file_hash)
 and cross-checked against BOOKS_DIR on disk, so it follows whatever is indexed.
 It is cached in memory and rebuilt whenever the collection's point count changes.
 
-Run:  .venv/bin/python library_browser.py [--port 8765] [--no-open]
+Run:  .venv/bin/python jorge.py [--port 8765] [--no-open]
 """
 
 import argparse
@@ -457,7 +461,7 @@ def _open_in_viewer(path: str, page: int):
 
 
 async def index(request: Request):
-    return FileResponse(HERE / "library_browser_static" / "index.html",
+    return FileResponse(HERE / "jorge_static" / "index.html",
                         headers={"Cache-Control": "no-cache"})
 
 
@@ -472,7 +476,7 @@ app = Starlette(routes=[
     Route("/api/cover/{hash}", api_cover),
     Route("/api/open", api_open, methods=["POST"]),
     Route("/file/{hash}", file_raw),
-    Mount("/static", StaticFiles(directory=HERE / "library_browser_static"), name="static"),
+    Mount("/static", StaticFiles(directory=HERE / "jorge_static"), name="static"),
 ])
 
 

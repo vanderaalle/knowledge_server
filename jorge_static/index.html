@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Library Stacks</title>
+<title>Jorge</title>
+<link rel="icon" type="image/svg+xml" href="/static/jorge.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -48,8 +49,9 @@ button { cursor: pointer; }
 /* ---- top bar */
 header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center;
   padding: 12px max(16px, env(safe-area-inset-left)); border-bottom: 1px solid var(--rule); background: var(--card); }
-.brand { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -.01em; min-width: 0; }
-.brand small { font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 8px; letter-spacing: .04em; }
+.brand { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -.01em; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.brand .logo { width: 28px; height: 28px; }
+.brand small { font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--muted); letter-spacing: .04em; }
 .search { flex: 1 1 420px; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .search input { flex: 1 1 220px; min-width: 0; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); }
 .modes { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; flex: none; }
@@ -205,7 +207,7 @@ dl.facts dd { margin: 0; overflow-wrap: anywhere; }
 <body>
 <header>
   <button class="iconbtn" id="navtoggle" aria-label="Show shelves">☰ Shelves</button>
-  <div class="brand">Library Stacks<small id="stats">loading…</small></div>
+  <div class="brand"><img src="/static/jorge.svg" alt="" class="logo">Jorge<small id="stats">loading…</small></div>
   <form class="search" id="searchform" role="search">
     <input id="q" type="search" placeholder="Filter titles…" autocomplete="off" aria-label="Search">
     <div class="modes" role="group" aria-label="Search mode">
@@ -359,7 +361,7 @@ function render() {
         <div class="modes" role="group" aria-label="Layout">
           <button type="button" data-view="grid" aria-pressed="${S.view==="grid"}">Covers</button>
           <button type="button" data-view="list" aria-pressed="${S.view==="list"}">List</button>
-          <button type="button" data-view="map" aria-pressed="${S.view==="map"}">Map</button>
+          <button type="button" data-view="map" aria-pressed="${S.view==="map"}">Aedificium</button>
         </div>
       </div>
     </div>
@@ -395,7 +397,7 @@ function renderBooks(c) {
   c.innerHTML = `<div class="crumbs"><div>
       <h1>Books about “${esc(q)}”</h1>
       <div class="sub">${books.length} book${books.length===1?"":"s"}, ranked by how strongly and how often they touch the idea · ${esc(folderLabel())}</div></div>
-      <div class="viewctl"><button class="iconbtn" data-view="map">Show on map</button><button class="iconbtn" id="clearsearch">Back to shelves</button></div></div>
+      <div class="viewctl"><button class="iconbtn" data-view="map">Show in the Aedificium</button><button class="iconbtn" id="clearsearch">Back to shelves</button></div></div>
     ${!books.length ? `<div class="empty">Nothing found. Try different wording, or widen the shelf.</div>` :
     books.map((b, i) => { const d = S.byHash[b.hash] || { hash: b.hash, title: "Unknown document", folder: "", exists: false, pages: "?" };
       const pages = b.pages.length > 8 ? b.pages.slice(0, 8).join(", ") + ` +${b.pages.length - 8}` : b.pages.join(", ");
@@ -418,7 +420,7 @@ function renderResults(c) {
   c.innerHTML = `<div class="crumbs"><div>
       <h1>${mode === "text" ? "Exact words" : "Passages about"} “${esc(q)}”</h1>
       <div class="sub">${hits.length} passage${hits.length===1?"":"s"} in ${groups.size} book${groups.size===1?"":"s"} · ${esc(folderLabel())}</div></div>
-      <div class="viewctl"><button class="iconbtn" data-view="map">Show on map</button><button class="iconbtn" id="clearsearch">Back to shelves</button></div></div>
+      <div class="viewctl"><button class="iconbtn" data-view="map">Show in the Aedificium</button><button class="iconbtn" id="clearsearch">Back to shelves</button></div></div>
     ${!hits.length ? `<div class="empty">Nothing found. ${mode === "text" ? "Exact search matches whole words; try Concepts for related ideas." : "Try different wording, or widen the shelf."}</div>` :
     [...groups].map(([hash, hs]) => { const d = S.byHash[hash] || { hash, title: "Unknown document", folder: "", exists: false };
       return `<div class="result"><div data-hash="${hash}">${coverHTML(d)}</div><div>
@@ -561,7 +563,7 @@ async function renderMap(c) {
   const hl = mapHighlight();
   const title = S.results && S.mode !== "titles"
     ? (S.results.mode === "books" ? "Books about" : S.results.mode === "text" ? "Exact words" : "Passages about") + ` “${esc(S.results.q)}”`
-    : "Map of the library";
+    : "Aedificium";
   const sub = hl ? `${hl.size} book${hl.size === 1 ? "" : "s"} lit up · ` : "";
   c.innerHTML = `<div class="crumbs"><div><h1>${title}</h1>
       <div class="sub">${sub}Books sit near books whose text is about similar things. Scroll to zoom, drag to pan, click a book to open it.</div></div>
@@ -569,14 +571,14 @@ async function renderMap(c) {
         <div class="modes" role="group" aria-label="Layout">
           <button type="button" data-view="grid" aria-pressed="false">Covers</button>
           <button type="button" data-view="list" aria-pressed="false">List</button>
-          <button type="button" data-view="map" aria-pressed="true">Map</button></div>`}</div></div>
-    <div class="mapwrap" id="mapwrap"><div class="loading" style="text-align:center;padding-top:120px">Loading the map…</div></div>`;
+          <button type="button" data-view="map" aria-pressed="true">Aedificium</button></div>`}</div></div>
+    <div class="mapwrap" id="mapwrap"><div class="loading" style="text-align:center;padding-top:120px">Entering the Aedificium…</div></div>`;
   if (!M.data) {
     const r = await api("/api/map").catch(e => ({ status: "error", error: e.message }));
     if (r.status !== "ready") {
       const w = $("#mapwrap"); if (!w) return;
       w.innerHTML = r.status === "error"
-        ? `<div class="empty">Could not build the map: ${esc(r.error)}</div>`
+        ? `<div class="empty">Could not build the Aedificium: ${esc(r.error)}</div>`
         : `<div class="empty">Placing ${S.docs.length.toLocaleString()} books by what they are about…<br>
            <span class="count">Reading every passage's vector the first time takes a minute or two. Later visits only update new books.</span>
            <div class="progress"><i style="width:${Math.round(100 * (r.progress || 0))}%"></i></div></div>`;
