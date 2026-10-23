@@ -1,0 +1,874 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Library Stacks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: card-catalogue stacks — shelves (folder tree) | drawer of books | open index card (detail) */
+:root {
+  --paper: #f2f3ef;
+  --card: #fbfbf8;
+  --ink: #1d2420;
+  --muted: #5d6862;
+  --rule: #d6dad3;
+  --accent: #2c6a4d;          /* library-binding green */
+  --accent-soft: #dcebe2;
+  --mark: #f2d58a;            /* highlighter on hits */
+  --warn: #a5502c;
+  --font-display: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "DejaVu Sans Mono", monospace;
+  --shadow: 0 1px 2px rgb(20 30 25 / .08), 0 4px 14px rgb(20 30 25 / .06);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #131816; --card: #1b2120; --ink: #e3e8e4; --muted: #94a19a; --rule: #2c3532;
+    --accent: #6fbf95; --accent-soft: #1f3a2d; --mark: #6b5a22; --warn: #e08a62;
+    --shadow: 0 1px 2px rgb(0 0 0 / .4); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #131816; --card: #1b2120; --ink: #e3e8e4; --muted: #94a19a; --rule: #2c3532;
+  --accent: #6fbf95; --accent-soft: #1f3a2d; --mark: #6b5a22; --warn: #e08a62;
+  --shadow: 0 1px 2px rgb(0 0 0 / .4); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 14px/1.5 var(--font-ui);
+  display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); }
+[hidden] { display: none !important; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- top bar */
+header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center;
+  padding: 12px max(16px, env(safe-area-inset-left)); border-bottom: 1px solid var(--rule); background: var(--card); }
+.brand { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -.01em; min-width: 0; }
+.brand small { font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 8px; letter-spacing: .04em; }
+.search { flex: 1 1 420px; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.search input { flex: 1 1 220px; min-width: 0; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); }
+.modes { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; flex: none; }
+.modes button { border: 0; background: transparent; padding: 7px 12px; color: var(--muted); }
+.modes button + button { border-left: 1px solid var(--rule); }
+.modes button[aria-pressed="true"] { background: var(--accent); color: var(--card); }
+.tools { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
+.iconbtn { border: 1px solid var(--rule); background: var(--card); border-radius: 6px; padding: 6px 10px; }
+.iconbtn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---- three panes */
+main { display: grid; grid-template-columns: 260px minmax(0, 1fr) 0; min-height: 0; }
+main.with-detail { grid-template-columns: 260px minmax(0, 1fr) minmax(360px, 34%); }
+nav, #center, #detail { overflow: auto; min-height: 0; }
+nav { border-right: 1px solid var(--rule); padding: 14px 8px 40px; }
+#center { padding: 16px 20px 60px; }
+#detail { border-left: 1px solid var(--rule); background: var(--card); }
+
+/* ---- shelves */
+.shelf-h { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 10px 10px 4px; }
+.tree ul { list-style: none; margin: 0; padding-left: 14px; }
+.tree > ul { padding-left: 0; }
+.node { display: flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 5px; cursor: pointer; }
+.node:hover { background: var(--accent-soft); }
+.node.sel { background: var(--accent); color: var(--card); }
+.node.sel .count { color: inherit; opacity: .8; }
+.twisty { width: 14px; flex: none; color: var(--muted); font-size: 10px; text-align: center; }
+.node .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.count { font-family: var(--font-mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.node.special .name { font-style: italic; }
+
+/* ---- center */
+.crumbs { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+.crumbs h1 { font-family: var(--font-display); font-weight: 600; font-size: 26px; margin: 0; text-wrap: balance; }
+.crumbs .sub { color: var(--muted); font-size: 13px; }
+.viewctl { display: flex; gap: 8px; align-items: center; }
+.viewctl select { padding: 5px 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--card); }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 22px 18px; }
+.book { cursor: pointer; display: grid; gap: 6px; align-content: start; }
+.cover { aspect-ratio: 2 / 3; max-width: 100%; border-radius: 3px 6px 6px 3px; background: var(--accent-soft);
+  box-shadow: var(--shadow); overflow: hidden; position: relative; border-left: 4px solid var(--accent); }
+.cover img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; display: block; background: var(--card); }
+.cover .ph { position: absolute; inset: 0; padding: 10px; font-family: var(--font-display); font-size: 14px; line-height: 1.2;
+  color: var(--accent); display: flex; align-items: flex-end; }
+.book:hover .cover { outline: 2px solid var(--accent); outline-offset: 2px; }
+.book.sel .cover { outline: 3px solid var(--accent); outline-offset: 2px; }
+.book .t { font-size: 13px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.book .m { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+
+table.list { width: 100%; border-collapse: collapse; }
+.list th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 500;
+  border-bottom: 1px solid var(--rule); padding: 6px 8px; }
+.list td { border-bottom: 1px solid var(--rule); padding: 7px 8px; vertical-align: top; }
+.list tr { cursor: pointer; }
+.list tbody tr:hover { background: var(--accent-soft); }
+.list tr.sel { background: var(--accent-soft); }
+.list .num { font-family: var(--font-mono); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.list .fold { color: var(--muted); font-size: 12px; }
+.tablewrap { overflow-x: auto; }
+
+.chip { display: inline-block; font-family: var(--font-mono); font-size: 10.5px; padding: 1px 6px; border-radius: 3px;
+  border: 1px solid var(--rule); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.chip.warn { border-color: var(--warn); color: var(--warn); }
+
+/* search results */
+.result { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.result .cover { cursor: pointer; }
+.result h3 { font-family: var(--font-display); font-weight: 600; font-size: 18px; margin: 0 0 2px; cursor: pointer; }
+.result h3:hover { color: var(--accent); }
+.result .where { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.hit { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 6px 8px; margin: 0 -8px; border-radius: 5px; cursor: pointer; }
+.hit:hover { background: var(--accent-soft); }
+.pg { font-family: var(--font-mono); font-size: 12px; color: var(--accent); white-space: nowrap; padding-top: 1px; }
+.hit .s { font-size: 13px; color: var(--ink); }
+.hit .sc { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); margin-left: 6px; }
+mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
+.loading { color: var(--muted); font-style: italic; padding: 24px 0; }
+
+/* ---- detail (index card) */
+.card { padding: 20px max(20px, env(safe-area-inset-right)) 40px 20px; display: grid; gap: 18px; }
+.card-top { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 16px; align-items: start; }
+.card h2 { font-family: var(--font-display); font-weight: 600; font-size: 22px; line-height: 1.2; margin: 0 0 6px; text-wrap: balance; }
+.card .close { justify-self: end; }
+dl.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 12.5px; }
+dl.facts dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
+dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+.mono { font-family: var(--font-mono); font-size: 12px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn { border: 1px solid var(--accent); background: var(--accent); color: var(--card); border-radius: 6px; padding: 6px 12px; text-decoration: none; font-size: 13px; }
+.btn.ghost { background: transparent; color: var(--accent); }
+.btn:hover { filter: brightness(1.08); }
+.section-h { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); border-bottom: 1px solid var(--rule); padding-bottom: 4px; margin: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.reader-nav { display: flex; gap: 6px; align-items: center; }
+.reader-nav input { width: 64px; padding: 3px 6px; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); font-family: var(--font-mono); font-size: 12px; text-align: center; }
+.reader-nav button { border: 1px solid var(--rule); background: var(--paper); border-radius: 4px; padding: 2px 8px; }
+.page-text { font-family: var(--font-display); font-size: 15.5px; line-height: 1.6; white-space: pre-wrap; max-height: 52vh; overflow: auto;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; }
+.sim { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 5px 6px; border-radius: 5px; cursor: pointer; }
+.sim:hover { background: var(--accent-soft); }
+.sim .cover { border-left-width: 2px; }
+.sim .t { font-size: 13px; line-height: 1.3; }
+.sim .f { font-size: 11px; color: var(--muted); }
+.bar { width: 48px; height: 4px; background: var(--rule); border-radius: 2px; overflow: hidden; }
+.bar.wide { width: 120px; }
+.rank { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 2px; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+
+.toast { position: fixed; bottom: calc(16px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: var(--paper); padding: 8px 14px; border-radius: 6px; font-size: 13px; box-shadow: var(--shadow); }
+
+/* map */
+:root { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --s0: #8b948f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --s0: #6d7772; } }
+:root[data-theme="dark"] { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --s0: #6d7772; }
+.mapwrap { position: relative; height: max(420px, calc(100vh - 190px)); border: 1px solid var(--rule); border-radius: 8px; background: var(--card); overflow: hidden; }
+.mapwrap canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.mapwrap canvas:active { cursor: grabbing; }
+.legend { position: absolute; left: 10px; bottom: 10px; display: grid; gap: 1px; background: color-mix(in srgb, var(--card) 88%, transparent);
+  border: 1px solid var(--rule); border-radius: 6px; padding: 6px; font-size: 12px; max-width: calc(100% - 20px); }
+.legend button { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 8px; align-items: center; text-align: left;
+  border: 0; background: transparent; padding: 2px 6px; border-radius: 4px; }
+.legend button:hover { background: var(--accent-soft); }
+.legend button.on { background: var(--accent-soft); font-weight: 600; }
+.legend .sw { width: 10px; height: 10px; border-radius: 50%; }
+.legend .ln { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mapctl { position: absolute; right: 10px; top: 10px; display: grid; gap: 4px; }
+.mapctl button { width: 32px; height: 32px; border: 1px solid var(--rule); background: var(--card); border-radius: 6px; font-size: 16px; line-height: 1; }
+.mapctl button:hover { border-color: var(--accent); color: var(--accent); }
+.tip { position: absolute; pointer-events: none; background: var(--card); border: 1px solid var(--rule); box-shadow: var(--shadow);
+  border-radius: 6px; padding: 7px 10px; font-size: 12px; max-width: 280px; z-index: 2; }
+.tip b { display: block; font-family: var(--font-display); font-size: 14px; font-weight: 600; line-height: 1.25; margin-bottom: 2px; }
+.tip span { color: var(--muted); }
+.mapnote { position: absolute; right: 52px; top: 12px; font-size: 12px; color: var(--muted); text-align: right; max-width: 50%; }
+.progress { width: min(360px, 80%); height: 6px; background: var(--rule); border-radius: 3px; overflow: hidden; margin: 14px auto 0; }
+.progress i { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+
+#navtoggle { display: none; }
+@media (max-width: 900px) {
+  main, main.with-detail { grid-template-columns: minmax(0, 1fr); }
+  nav { position: fixed; z-index: 5; top: 0; bottom: 0; left: 0; width: min(300px, 85vw); background: var(--card);
+    padding-top: calc(14px + env(safe-area-inset-top)); transform: translateX(-100%); transition: transform .2s; box-shadow: var(--shadow); }
+  nav.open { transform: none; }
+  #navtoggle { display: inline-block; }
+  #detail { position: fixed; z-index: 6; inset: 0; border: 0; padding-top: env(safe-area-inset-top); }
+  #center { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <button class="iconbtn" id="navtoggle" aria-label="Show shelves">☰ Shelves</button>
+  <div class="brand">Library Stacks<small id="stats">loading…</small></div>
+  <form class="search" id="searchform" role="search">
+    <input id="q" type="search" placeholder="Filter titles…" autocomplete="off" aria-label="Search">
+    <div class="modes" role="group" aria-label="Search mode">
+      <button type="button" data-mode="titles" aria-pressed="true" title="Filter books by title, author or file name">Titles</button>
+      <button type="button" data-mode="semantic" aria-pressed="false" title="Find passages about a concept (semantic search)">Concepts</button>
+      <button type="button" data-mode="books" aria-pressed="false" title="Rank whole books by how much they deal with an idea">Book topics</button>
+      <button type="button" data-mode="text" aria-pressed="false" title="Find passages containing these exact words">Exact words</button>
+    </div>
+  </form>
+  <div class="tools">
+    <button class="iconbtn" id="refresh" title="Rebuild the catalog from the index and rescan the Books folder">Rescan</button>
+    <button class="iconbtn" id="theme" title="Switch light / dark">◐</button>
+  </div>
+</header>
+
+<main id="main">
+  <nav id="nav"><div class="tree" id="tree"></div></nav>
+  <section id="center"><div class="loading">Reading the catalog from the index…</div></section>
+  <aside id="detail" hidden></aside>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtSize = b => b > 1e9 ? (b/1e9).toFixed(1)+" GB" : b > 1e6 ? (b/1e6).toFixed(1)+" MB" : Math.round(b/1e3)+" kB";
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("ls:"+k)) ?? d } catch { return d } },
+                set(k, v) { try { localStorage.setItem("ls:"+k, JSON.stringify(v)) } catch {} } };
+
+const S = {
+  docs: [], byHash: {}, unindexed: [], booksDir: "",
+  folder: store.get("folder", ""),        // "" = all; "!unindexed", "!missing" are virtual shelves
+  mode: "titles", q: "",
+  view: store.get("view", "grid"), sort: store.get("sort", "title"),
+  open: store.get("open", {}), sel: null, page: 1, results: null,
+};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  return r.json();
+}
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 2200); }
+
+async function loadCatalog(refresh) {
+  const c = await api("/api/catalog" + (refresh ? "?refresh=1" : ""));
+  S.docs = c.docs; S.unindexed = c.unindexed; S.booksDir = c.books_dir;
+  S.byHash = Object.fromEntries(c.docs.map(d => [d.hash, d]));
+  const missing = c.docs.filter(d => !d.exists).length;
+  $("#stats").textContent = `${c.docs.length.toLocaleString()} books · ${c.points.toLocaleString()} passages` +
+    (c.unindexed.length ? ` · ${c.unindexed.length} not indexed` : "") + (missing ? ` · ${missing} missing` : "");
+  renderTree(); render();
+}
+
+/* ---------- shelves */
+function buildTree() {
+  const root = { name: "", path: "", kids: {}, n: 0 };
+  const add = (folder) => {
+    let node = root; root.n++;
+    if (!folder) return;
+    let path = "";
+    for (const part of folder.split("/")) {
+      path = path ? path + "/" + part : part;
+      node = node.kids[part] ??= { name: part, path, kids: {}, n: 0 };
+      node.n++;
+    }
+  };
+  S.docs.forEach(d => add(d.folder));
+  return root;
+}
+function renderTree() {
+  const root = buildTree();
+  const li = (node) => {
+    const kids = Object.values(node.kids).sort((a, b) => a.name.localeCompare(b.name));
+    const open = S.open[node.path];
+    return `<li><div class="node ${S.folder === node.path ? "sel" : ""}" data-folder="${esc(node.path)}">
+      <span class="twisty" data-toggle="${esc(node.path)}">${kids.length ? (open ? "▾" : "▸") : ""}</span>
+      <span class="name" title="${esc(node.path)}">${esc(node.name.replace(/^~other$/, "Outside Books").replace(/-/g, " "))}</span>
+      <span class="count">${node.n}</span></div>
+      ${kids.length && open ? `<ul>${kids.map(li).join("")}</ul>` : ""}</li>`;
+  };
+  const top = Object.values(root.kids).sort((a, b) => a.name.localeCompare(b.name));
+  const loose = S.docs.filter(d => d.folder === "").length;
+  const missing = S.docs.filter(d => !d.exists).length;
+  $("#tree").innerHTML = `
+    <div class="shelf-h">Shelves</div>
+    <ul>
+      <li><div class="node ${S.folder === "" ? "sel" : ""}" data-folder=""><span class="twisty"></span><span class="name">Whole library</span><span class="count">${root.n}</span></div></li>
+      ${top.map(li).join("")}
+      ${loose ? `<li><div class="node special ${S.folder === "!loose" ? "sel" : ""}" data-folder="!loose"><span class="twisty"></span><span class="name">Loose in Books/</span><span class="count">${loose}</span></div></li>` : ""}
+    </ul>
+    <div class="shelf-h">Housekeeping</div>
+    <ul>
+      <li><div class="node special ${S.folder === "!unindexed" ? "sel" : ""}" data-folder="!unindexed"><span class="twisty"></span><span class="name">On disk, not indexed</span><span class="count">${S.unindexed.length}</span></div></li>
+      <li><div class="node special ${S.folder === "!missing" ? "sel" : ""}" data-folder="!missing"><span class="twisty"></span><span class="name">Indexed, file missing</span><span class="count">${missing}</span></div></li>
+    </ul>`;
+}
+$("#tree").addEventListener("click", e => {
+  const tog = e.target.closest("[data-toggle]");
+  if (tog && tog.textContent) { S.open[tog.dataset.toggle] = !S.open[tog.dataset.toggle]; store.set("open", S.open); renderTree(); return; }
+  const n = e.target.closest("[data-folder]"); if (!n) return;
+  S.folder = n.dataset.folder; store.set("folder", S.folder);
+  if (S.folder && !S.folder.startsWith("!")) { S.open[S.folder] = true; store.set("open", S.open); }
+  $("#nav").classList.remove("open");
+  renderTree();
+  if (S.mode !== "titles" && S.q) runSearch(); else render();
+});
+
+/* ---------- center */
+function inFolder(d) {
+  if (S.folder === "") return true;
+  if (S.folder === "!missing") return !d.exists;
+  if (S.folder === "!loose") return d.folder === "";
+  return d.folder === S.folder || d.folder.startsWith(S.folder + "/");
+}
+function folderLabel() {
+  return ({ "": "Whole library", "!unindexed": "On disk, not indexed", "!missing": "Indexed, file missing", "!loose": "Loose in Books/" })[S.folder]
+    ?? S.folder.split("/").map(p => p.replace(/-/g, " ")).join(" › ");
+}
+const sorters = {
+  title: (a, b) => a.title.localeCompare(b.title),
+  pages: (a, b) => b.pages - a.pages,
+  recent: (a, b) => b.mtime - a.mtime,
+  size: (a, b) => b.size - a.size,
+};
+function coverHTML(d) {
+  return `<div class="cover"><div class="ph">${esc(d.title)}</div>${d.exists ? `<img loading="lazy" alt="" src="/api/cover/${d.hash}" onerror="this.remove()">` : ""}</div>`;
+}
+
+function render() {
+  const c = $("#center");
+  if (S.folder === "!unindexed") return renderUnindexed(c);
+  if (S.view === "map") return renderMap(c);
+  if (S.mode !== "titles" && S.results) return S.results.mode === "books" ? renderBooks(c) : renderResults(c);
+  const words = S.mode === "titles" ? S.q.toLowerCase().split(/\s+/).filter(Boolean) : [];
+  let docs = S.docs.filter(inFolder).filter(d => {
+    if (!words.length) return true;
+    const hay = (d.title + " " + d.file + " " + d.folder).toLowerCase();
+    return words.every(w => hay.includes(w));
+  }).sort(sorters[S.sort]);
+  const pages = docs.reduce((a, d) => a + d.pages, 0);
+  c.innerHTML = `
+    <div class="crumbs">
+      <div><h1>${esc(folderLabel())}</h1>
+      <div class="sub">${docs.length} book${docs.length === 1 ? "" : "s"} · ${pages.toLocaleString()} pages${words.length ? ` · matching “${esc(S.q)}”` : ""}</div></div>
+      <div class="viewctl">
+        <select id="sort" aria-label="Sort by">
+          ${[["title","Title A–Z"],["recent","Recently added"],["pages","Most pages"],["size","Largest file"]].map(([v,l]) => `<option value="${v}" ${S.sort===v?"selected":""}>${l}</option>`).join("")}
+        </select>
+        <div class="modes" role="group" aria-label="Layout">
+          <button type="button" data-view="grid" aria-pressed="${S.view==="grid"}">Covers</button>
+          <button type="button" data-view="list" aria-pressed="${S.view==="list"}">List</button>
+          <button type="button" data-view="map" aria-pressed="${S.view==="map"}">Map</button>
+        </div>
+      </div>
+    </div>
+    ${!docs.length ? `<div class="empty">No books here${words.length ? " match that filter" : ""}.</div>` :
+      S.view === "grid" ? `<div class="grid">${docs.map(d => `
+        <div class="book ${S.sel===d.hash?"sel":""}" data-hash="${d.hash}" tabindex="0">
+          ${coverHTML(d)}<div class="t">${esc(d.title)}</div>
+          <div class="m">${d.pages} pp · ${d.ext}${d.exists ? "" : ' · <span class="chip warn">missing</span>'}</div>
+        </div>`).join("")}</div>`
+      : `<div class="tablewrap"><table class="list"><thead><tr><th>Title</th><th>Shelf</th><th class="num">Pages</th><th class="num">Size</th></tr></thead><tbody>
+        ${docs.map(d => `<tr class="${S.sel===d.hash?"sel":""}" data-hash="${d.hash}" tabindex="0">
+          <td>${esc(d.title)} ${d.ext === "epub" ? '<span class="chip">epub</span>' : ""}${d.exists ? "" : ' <span class="chip warn">missing</span>'}
+            ${d.title !== d.file.replace(/\.[^.]+$/, "") ? `<div class="fold">${esc(d.file)}</div>` : ""}</td>
+          <td class="fold">${esc(d.folder.replace(/-/g, " ") || "—")}</td>
+          <td class="num">${d.pages}</td><td class="num">${d.exists ? fmtSize(d.size) : "—"}</td></tr>`).join("")}
+        </tbody></table></div>`}`;
+}
+
+function renderUnindexed(c) {
+  const files = S.unindexed.slice().sort((a, b) => b.mtime - a.mtime);
+  c.innerHTML = `<div class="crumbs"><div><h1>On disk, not indexed</h1>
+    <div class="sub">PDF and epub files under ${esc(S.booksDir)} with no passages in the index. Ask Claude to index them with <span class="mono">index_single_pdf</span>, or OCR them if they are scans.</div></div></div>
+    ${!files.length ? `<div class="empty">Every book on disk is indexed.</div>` :
+    `<div class="tablewrap"><table class="list"><thead><tr><th>File</th><th>Shelf</th><th class="num">Size</th><th class="num">Modified</th></tr></thead><tbody>
+    ${files.map(f => `<tr data-copy="${esc(f.path)}" title="Click to copy the path"><td>${esc(f.file)}</td><td class="fold">${esc(f.folder || "—")}</td>
+      <td class="num">${fmtSize(f.size)}</td><td class="num">${new Date(f.mtime*1000).toISOString().slice(0,10)}</td></tr>`).join("")}
+    </tbody></table></div>`}`;
+}
+
+function renderBooks(c) {
+  const { books, q } = S.results;
+  const max = Math.max(...books.map(b => b.score), 0.0001);
+  c.innerHTML = `<div class="crumbs"><div>
+      <h1>Books about “${esc(q)}”</h1>
+      <div class="sub">${books.length} book${books.length===1?"":"s"}, ranked by how strongly and how often they touch the idea · ${esc(folderLabel())}</div></div>
+      <div class="viewctl"><button class="iconbtn" data-view="map">Show on map</button><button class="iconbtn" id="clearsearch">Back to shelves</button></div></div>
+    ${!books.length ? `<div class="empty">Nothing found. Try different wording, or widen the shelf.</div>` :
+    books.map((b, i) => { const d = S.byHash[b.hash] || { hash: b.hash, title: "Unknown document", folder: "", exists: false, pages: "?" };
+      const pages = b.pages.length > 8 ? b.pages.slice(0, 8).join(", ") + ` +${b.pages.length - 8}` : b.pages.join(", ");
+      return `<div class="result"><div data-hash="${b.hash}" data-page="${b.hits[0]?.page ?? ""}">${coverHTML(d)}</div><div>
+        <div class="rank"><span class="pg">#${i + 1}</span><div class="bar wide" title="relevance ${b.score.toFixed(3)}"><i style="width:${Math.round(100 * b.score / max)}%"></i></div>
+          <span class="count">${b.passages} passage${b.passages===1?"":"s"} · pp. ${pages}</span></div>
+        <h3 data-hash="${b.hash}" data-page="${b.hits[0]?.page ?? ""}">${esc(d.title)}</h3>
+        <div class="where">${esc(d.folder.replace(/-/g, " ") || "Books")} · ${d.pages} pp</div>
+        ${b.hits.map(h => `<div class="hit" data-hash="${b.hash}" data-page="${h.page}">
+          <span class="pg">p. ${h.page}</span><span class="s">${esc(h.snippet)}<span class="sc">${h.score.toFixed(2)}</span></span></div>`).join("")}
+      </div></div>`; }).join("")}`;
+}
+
+function renderResults(c) {
+  const { hits, q, mode } = S.results;
+  const groups = new Map();
+  for (const h of hits) { if (!groups.has(h.hash)) groups.set(h.hash, []); groups.get(h.hash).push(h); }
+  const re = mode === "text" ? new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi") : null;
+  const hl = s => re ? esc(s).replace(new RegExp(esc(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), m => `<mark>${m}</mark>`) : esc(s);
+  c.innerHTML = `<div class="crumbs"><div>
+      <h1>${mode === "text" ? "Exact words" : "Passages about"} “${esc(q)}”</h1>
+      <div class="sub">${hits.length} passage${hits.length===1?"":"s"} in ${groups.size} book${groups.size===1?"":"s"} · ${esc(folderLabel())}</div></div>
+      <div class="viewctl"><button class="iconbtn" data-view="map">Show on map</button><button class="iconbtn" id="clearsearch">Back to shelves</button></div></div>
+    ${!hits.length ? `<div class="empty">Nothing found. ${mode === "text" ? "Exact search matches whole words; try Concepts for related ideas." : "Try different wording, or widen the shelf."}</div>` :
+    [...groups].map(([hash, hs]) => { const d = S.byHash[hash] || { hash, title: "Unknown document", folder: "", exists: false };
+      return `<div class="result"><div data-hash="${hash}">${coverHTML(d)}</div><div>
+        <h3 data-hash="${hash}">${esc(d.title)}</h3>
+        <div class="where">${esc(d.folder.replace(/-/g, " ") || "Books")} · ${d.pages ?? "?"} pp</div>
+        ${hs.sort((a, b) => a.page - b.page).map(h => `<div class="hit" data-hash="${hash}" data-page="${h.page}">
+          <span class="pg">p. ${h.page}</span><span class="s">${hl(h.snippet)}${h.score != null ? `<span class="sc">${h.score.toFixed(2)}</span>` : ""}</span></div>`).join("")}
+      </div></div>`; }).join("")}`;
+}
+
+$("#center").addEventListener("click", e => {
+  if (e.target.closest("#clearsearch")) { S.results = null; S.q = ""; $("#q").value = ""; setMode("titles"); return; }
+  const v = e.target.closest("[data-view]");
+  if (v) { S.view = v.dataset.view; if (S.view !== "map" || !S.results) store.set("view", S.view); return render(); }
+  const cp = e.target.closest("[data-copy]");
+  if (cp) { navigator.clipboard?.writeText(cp.dataset.copy).then(() => toast("Path copied"), () => {}); return; }
+  const h = e.target.closest("[data-hash]");
+  if (h) openDetail(h.dataset.hash, +h.dataset.page || null);
+});
+$("#center").addEventListener("keydown", e => { if (e.key === "Enter" && e.target.dataset.hash) openDetail(e.target.dataset.hash); });
+$("#center").addEventListener("change", e => { if (e.target.id === "sort") { S.sort = e.target.value; store.set("sort", S.sort); render(); } });
+
+/* ---------- map */
+const M = { data: null, nodes: null, links: null, key: null, t: d3.zoomIdentity, hover: null, fitKey: null, poll: null, fitK: 1 };
+
+/* Region labels: k-means on the laid-out positions (so regions are what the eye sees),
+   named by title/file-name terms that are frequent in the region and rare in the library. */
+const STOP = new Set(`the and for with from into onto over under about after before between through within without upon via
+of to in on at by an or as is are be its it this that these those their his her our your vol volume volumes edition ed eds
+editor editors edited part parts book books introduction handbook guide new second third revised series press university
+publishing publishers publisher springer wiley routledge mit oxford cambridge elsevier academic verlag york london
+pdf epub djvu libgen bookfi org com www scan ocr copy pages draft final version chapter chapters reader proceedings
+il lo la le gli dei degli delle del della dello di da dal dalla nel nella nei per con una uno un che non sul sulla sugli
+et les des du une pour dans sur par der die das und den dem ein eine zur zum von mit auf als
+what how why who when where which all one two three more most other some such than then also not can will toward towards
+dell nell sull dall all ita eng fra deu esp ger`.split(/\s+/));
+function terms(d) {
+  const raw = d.title.replace(/[_\[\]().,;:]+/g, " ");
+  const words = raw.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^a-z]+/)
+    .filter(w => w.length > 2 && !STOP.has(w));
+  const set = new Set(words);
+  for (let i = 0; i + 1 < words.length; i++) set.add(words[i] + " " + words[i + 1]);
+  return set;
+}
+function kmeans2d(pts, k, iters = 30) {
+  // deterministic farthest-point initialisation, then Lloyd iterations
+  const c = [[d3.mean(pts, p => p.x), d3.mean(pts, p => p.y)]];
+  const dist = p => Math.min(...c.map(([x, y]) => (p.x - x) ** 2 + (p.y - y) ** 2));
+  while (c.length < k) { const p = d3.greatest(pts, dist); c.push([p.x, p.y]); }
+  const lab = new Array(pts.length).fill(0);
+  for (let it = 0; it < iters; it++) {
+    pts.forEach((p, i) => lab[i] = d3.minIndex(c, ([x, y]) => (p.x - x) ** 2 + (p.y - y) ** 2));
+    c.forEach((cc, j) => { const m = pts.filter((_, i) => lab[i] === j); if (m.length) { cc[0] = d3.mean(m, p => p.x); cc[1] = d3.mean(m, p => p.y); } });
+  }
+  return c.map((cc, j) => pts.filter((_, i) => lab[i] === j)).filter(m => m.length);
+}
+function buildRegions() {
+  const N = M.nodes.length;
+  M.nodes.forEach(n => n.terms ??= terms(n.d));
+  const df = new Map();
+  M.nodes.forEach(n => n.terms.forEach(t => df.set(t, (df.get(t) || 0) + 1)));
+  // a plural counts as its singular when the singular also occurs
+  const fold = t => t.endsWith("s") && !t.endsWith("ss") && df.has(t.slice(0, -1)) ? t.slice(0, -1) : t;
+  // Score a term by how common it is in the region, how rare in the library, and how few
+  // other regions also use it, so neighbouring areas get different names.
+  const candidates = members => {
+    const cnt = new Map();
+    members.forEach(n => new Set([...n.terms].map(fold)).forEach(t => cnt.set(t, (cnt.get(t) || 0) + 1)));
+    const minHits = Math.max(2, Math.ceil(members.length * 0.12));
+    return [...cnt].filter(([t, c]) => c >= minHits && (df.get(t) || c) < N * 0.3);
+  };
+  const name = (cands, rf, R) => {
+    const n = cands.size;
+    const scored = [...cands.list].map(([t, c]) => [t, (c / n) * Math.log(N / (df.get(t) || c))
+        * Math.log(1 + R / rf.get(t)) * (t.includes(" ") ? 1.3 : 1)])
+      .sort((a, b) => b[1] - a[1]);
+    const picked = [];
+    const words = new Set();
+    for (const [t] of scored) {
+      if (t.split(" ").some(w => words.has(w))) continue;
+      t.split(" ").forEach(w => words.add(w));
+      picked.push(t); if (picked.length === 3) break;
+    }
+    return picked.join(" · ");
+  };
+  const make = k => {
+    const groups = kmeans2d(M.nodes, k).map(m => ({ m, list: candidates(m), size: m.length }));
+    const rf = new Map();
+    groups.forEach(g => g.list.forEach(([t]) => rf.set(t, (rf.get(t) || 0) + 1)));
+    return groups.map(g => ({ x: d3.mean(g.m, n => n.x), y: d3.mean(g.m, n => n.y), n: g.size, label: name(g, rf, groups.length) }))
+      .filter(r => r.label);
+  };
+  const fine = make(Math.max(8, Math.round(N / 30)));
+  const coarse = make(Math.max(4, Math.round(Math.sqrt(N / 8))));
+  // A broad area is named after the leading terms of the neighbourhoods it contains.
+  const kids = coarse.map(() => []);
+  fine.forEach(f => kids[d3.minIndex(coarse, c => (c.x - f.x) ** 2 + (c.y - f.y) ** 2)].push(f));
+  coarse.forEach((c, i) => {
+    const words = new Set(), heads = [];
+    for (const f of kids[i].sort((a, b) => b.n - a.n)) {
+      const head = f.label.split(" · ")[0];
+      if (head.split(" ").some(w => words.has(w))) continue;
+      head.split(" ").forEach(w => words.add(w)); heads.push(head);
+      if (heads.length === 3) break;
+    }
+    if (heads.length) c.label = heads.join(" · ");
+  });
+  M.regions = { coarse, fine };
+}
+const topShelf = d => d.folder && !d.folder.startsWith("~") ? d.folder.split("/")[0] : "";
+function shelfColours() {
+  const shelves = [...new Set(S.docs.map(topShelf).filter(Boolean))].sort();
+  const css = getComputedStyle(document.documentElement);
+  const col = Object.fromEntries(shelves.map((s, i) => [s, css.getPropertyValue(i < 8 ? `--s${i + 1}` : "--s0").trim()]));
+  col[""] = css.getPropertyValue("--s0").trim();
+  return { shelves, col };
+}
+function mapHighlight() {
+  // hash -> weight in (0, 1]; null when nothing is being searched
+  if (S.mode !== "titles" && S.results) {
+    const w = new Map();
+    if (S.results.mode === "books") {
+      const max = Math.max(...S.results.books.map(b => b.score), 1e-6);
+      S.results.books.forEach(b => w.set(b.hash, b.score / max));
+    } else {
+      for (const h of S.results.hits) w.set(h.hash, Math.max(w.get(h.hash) || 0, h.score ?? 1));
+      const max = Math.max(...w.values(), 1e-6);
+      for (const [k, v] of w) w.set(k, v / max);
+    }
+    return w;
+  }
+  if (S.mode === "titles" && S.q) {
+    const words = S.q.toLowerCase().split(/\s+/);
+    return new Map(S.docs.filter(d => words.every(x => (d.title + " " + d.file).toLowerCase().includes(x))).map(d => [d.hash, 1]));
+  }
+  return null;
+}
+
+async function renderMap(c) {
+  const hl = mapHighlight();
+  const title = S.results && S.mode !== "titles"
+    ? (S.results.mode === "books" ? "Books about" : S.results.mode === "text" ? "Exact words" : "Passages about") + ` “${esc(S.results.q)}”`
+    : "Map of the library";
+  const sub = hl ? `${hl.size} book${hl.size === 1 ? "" : "s"} lit up · ` : "";
+  c.innerHTML = `<div class="crumbs"><div><h1>${title}</h1>
+      <div class="sub">${sub}Books sit near books whose text is about similar things. Scroll to zoom, drag to pan, click a book to open it.</div></div>
+      <div class="viewctl">${S.results && S.mode !== "titles" ? `<button class="iconbtn" data-view="list">Back to results</button>` : `
+        <div class="modes" role="group" aria-label="Layout">
+          <button type="button" data-view="grid" aria-pressed="false">Covers</button>
+          <button type="button" data-view="list" aria-pressed="false">List</button>
+          <button type="button" data-view="map" aria-pressed="true">Map</button></div>`}</div></div>
+    <div class="mapwrap" id="mapwrap"><div class="loading" style="text-align:center;padding-top:120px">Loading the map…</div></div>`;
+  if (!M.data) {
+    const r = await api("/api/map").catch(e => ({ status: "error", error: e.message }));
+    if (r.status !== "ready") {
+      const w = $("#mapwrap"); if (!w) return;
+      w.innerHTML = r.status === "error"
+        ? `<div class="empty">Could not build the map: ${esc(r.error)}</div>`
+        : `<div class="empty">Placing ${S.docs.length.toLocaleString()} books by what they are about…<br>
+           <span class="count">Reading every passage's vector the first time takes a minute or two. Later visits only update new books.</span>
+           <div class="progress"><i style="width:${Math.round(100 * (r.progress || 0))}%"></i></div></div>`;
+      clearTimeout(M.poll); M.poll = setTimeout(() => S.view === "map" && render(), 1500);
+      return;
+    }
+    M.data = r;
+  }
+  if (!$("#mapwrap")) return;
+  drawMap(hl);
+}
+
+function layoutMap() {
+  const key = M.data.nodes.length + ":" + M.data.edges.length;
+  if (M.key === key) return;
+  M.nodes = M.data.nodes.map(n => ({ ...n, d: S.byHash[n.hash], x: n.x * 260, y: n.y * 260 })).filter(n => n.d);
+  const idx = new Map(M.data.nodes.map((n, i) => [i, M.nodes.find(m => m.hash === n.hash)]));
+  M.links = M.data.edges.map(([a, b, w]) => ({ source: idx.get(a), target: idx.get(b), w })).filter(l => l.source && l.target);
+  M.nodes.forEach(n => n.r = Math.min(9, 2.2 + Math.sqrt(n.d.pages || 1) / 5));
+  const ws = M.links.map(l => l.w).sort((a, b) => a - b), lo = ws[0] ?? 0, hi = ws.at(-1) ?? 1;
+  d3.forceSimulation(M.nodes)
+    .force("link", d3.forceLink(M.links).distance(l => 18 + 40 * (1 - (l.w - lo) / (hi - lo || 1))).strength(0.35))
+    .force("charge", d3.forceManyBody().strength(-26).distanceMax(400))
+    .force("collide", d3.forceCollide(n => n.r + 1.5))
+    .force("x", d3.forceX().strength(0.02)).force("y", d3.forceY().strength(0.02))
+    .stop().tick(320);
+  M.tree = d3.quadtree(M.nodes, n => n.x, n => n.y);
+  buildRegions();
+  M.key = key; M.t = null;
+}
+
+function drawMap(hl) {
+  layoutMap();
+  const wrap = $("#mapwrap");
+  wrap.innerHTML = `<canvas id="mapcv" aria-label="Map of the library: books placed by similarity of content"></canvas>
+    <div class="mapctl"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">−</button><button id="zfit" title="Fit the whole library">⤢</button></div>
+    <div class="legend" id="legend"></div><div class="tip" id="tip" hidden></div>`;
+  const cv = $("#mapcv"), ctx = cv.getContext("2d"), tip = $("#tip");
+  const { shelves, col } = shelfColours();
+  const lit = n => (!hl || hl.has(n.hash)) && inFolder(n.d);
+  const anyFilter = !!hl || S.folder !== "";
+  const nbrs = new Map(M.nodes.map(n => [n, []]));
+  M.links.forEach(l => { nbrs.get(l.source).push(l.target); nbrs.get(l.target).push(l.source); });
+
+  // legend doubles as a shelf filter, so colour is never the only cue
+  const counts = Object.fromEntries(shelves.map(s => [s, S.docs.filter(d => topShelf(d) === s).length]));
+  $("#legend").innerHTML = shelves.map(s => `<button data-shelf="${esc(s)}" class="${S.folder === s ? "on" : ""}">
+    <span class="sw" style="background:${col[s]}"></span><span class="ln">${esc(s.replace(/-/g, " "))}</span><span class="count">${counts[s]}</span></button>`).join("");
+  $("#legend").onclick = e => { const b = e.target.closest("[data-shelf]"); if (!b) return;
+    S.folder = S.folder === b.dataset.shelf ? "" : b.dataset.shelf; store.set("folder", S.folder); renderTree(); render(); };
+
+  let W = 0, H = 0;
+  const resize = () => { const r = wrap.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+    W = r.width; H = r.height; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); draw(); };
+
+  function draw() {
+    const t = M.t, css = getComputedStyle(document.documentElement);
+    const ink = css.getPropertyValue("--ink").trim(), card = css.getPropertyValue("--card").trim(), muted = css.getPropertyValue("--muted").trim();
+    ctx.clearRect(0, 0, W, H);
+    const sx = n => t.applyX(n.x), sy = n => t.applyY(n.y), grow = Math.max(1, Math.sqrt(t.k));
+    const focus = M.hover || (S.sel && M.nodes.find(n => n.hash === S.sel)) || null;
+    // edges
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = muted;
+    ctx.globalAlpha = anyFilter ? 0.06 : Math.min(0.22, 0.08 + t.k * 0.03);
+    ctx.beginPath();
+    for (const l of M.links) { ctx.moveTo(sx(l.source), sy(l.source)); ctx.lineTo(sx(l.target), sy(l.target)); }
+    ctx.stroke();
+    if (focus) {
+      ctx.globalAlpha = 0.8; ctx.strokeStyle = ink; ctx.lineWidth = 1.5; ctx.beginPath();
+      for (const m of nbrs.get(focus)) { ctx.moveTo(sx(focus), sy(focus)); ctx.lineTo(sx(m), sy(m)); }
+      ctx.stroke();
+    }
+    // nodes: dimmed first, lit on top
+    const order = anyFilter ? [...M.nodes].sort((a, b) => lit(a) - lit(b)) : M.nodes;
+    for (const n of order) {
+      const on = lit(n), w = hl?.get(n.hash) ?? 1;
+      const r = n.r * grow * (hl && on ? 0.8 + 0.7 * w : 1);
+      ctx.globalAlpha = on ? (hl ? 0.45 + 0.55 * w : 0.9) : 0.13;
+      ctx.beginPath(); ctx.arc(sx(n), sy(n), r, 0, 2 * Math.PI);
+      ctx.fillStyle = col[topShelf(n.d)] || col[""]; ctx.fill();
+      if (on && (hl || t.k > 1.5)) { ctx.globalAlpha = 1; ctx.lineWidth = 1.5; ctx.strokeStyle = card; ctx.stroke(); }
+      if (n === focus || n.hash === S.sel) { ctx.globalAlpha = 1; ctx.lineWidth = 2; ctx.strokeStyle = ink;
+        ctx.beginPath(); ctx.arc(sx(n), sy(n), r + 3, 0, 2 * Math.PI); ctx.stroke(); }
+    }
+    // region labels: broad areas when zoomed out, neighbourhoods in between, none up close
+    const z = t.k / M.fitK, boxes = [];
+    const level = z < 1.8 ? "coarse" : z < 4.5 ? "fine" : null;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    if (level) {
+      const size = level === "coarse" ? 17 : 14;
+      ctx.font = `italic 600 ${size}px ${css.getPropertyValue("--font-display")}`;
+      for (const r of [...M.regions[level]].sort((a, b) => b.n - a.n)) {
+        const x = t.applyX(r.x), y = t.applyY(r.y), w = ctx.measureText(r.label).width;
+        const box = [x - w / 2 - 4, y - size * 0.7, x + w / 2 + 4, y + size * 0.7];
+        if (box[2] < 0 || box[0] > W || box[3] < 0 || box[1] > H) continue;
+        if (boxes.some(b => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
+        boxes.push(box);
+        ctx.globalAlpha = hl ? 0.45 : 0.92;
+        ctx.lineWidth = 4; ctx.strokeStyle = card; ctx.strokeText(r.label, x, y);
+        ctx.fillStyle = ink; ctx.fillText(r.label, x, y);
+      }
+    }
+    // book labels: highlighted books first, then the largest; skip any that would overlap
+    ctx.globalAlpha = 1; ctx.textAlign = "left";
+    const cands = M.nodes.filter(n => lit(n) && sx(n) > -50 && sx(n) < W + 50 && sy(n) > -20 && sy(n) < H + 20);
+    cands.sort((a, b) => (hl ? (hl.get(b.hash) || 0) - (hl.get(a.hash) || 0) : 0) || b.r - a.r);
+    const budget = hl ? 18 : level === "coarse" ? 0 : level === "fine" ? Math.round(2 * z) : Math.round(4 * z * z);
+    if (focus && !cands.includes(focus)) cands.unshift(focus);
+    let shown = 0;
+    for (const n of [focus, ...cands].filter(Boolean)) {
+      if (shown >= budget && n !== focus) break;
+      const label = n.d.title.length > 42 ? n.d.title.slice(0, 40) + "…" : n.d.title;
+      ctx.font = `${n === focus ? 600 : 500} 12px ${css.getPropertyValue("--font-ui")}`;
+      const w = ctx.measureText(label).width, x = sx(n) + n.r * grow + 5, y = sy(n);
+      const box = [x - 2, y - 8, x + w + 2, y + 8];
+      if (n !== focus && boxes.some(b => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
+      boxes.push(box); shown++;
+      ctx.lineWidth = 3; ctx.strokeStyle = card; ctx.strokeText(label, x, y);
+      ctx.fillStyle = ink; ctx.fillText(label, x, y);
+    }
+  }
+  M.draw = draw;
+
+  const zoom = d3.zoom().scaleExtent([0.15, 14]).on("zoom", e => { M.t = e.transform; tip.hidden = true; draw(); });
+  const sel = d3.select(cv).call(zoom).on("dblclick.zoom", null);
+  const fitTo = (nodes, animate) => {
+    if (!nodes.length) return;
+    const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y), pad = 40;
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    const k = Math.min(8, 0.9 * Math.min((W - 2 * pad) / (x1 - x0 || 1), (H - 2 * pad) / (y1 - y0 || 1)));
+    const t = d3.zoomIdentity.translate(W / 2 - k * (x0 + x1) / 2, H / 2 - k * (y0 + y1) / 2).scale(k);
+    if (nodes === M.nodes) M.fitK = k;
+    (animate ? sel.transition().duration(600) : sel).call(zoom.transform, t);
+  };
+  $("#zin").onclick = () => sel.transition().duration(250).call(zoom.scaleBy, 1.6);
+  $("#zout").onclick = () => sel.transition().duration(250).call(zoom.scaleBy, 1 / 1.6);
+  $("#zfit").onclick = () => fitTo(M.nodes, true);
+
+  cv.addEventListener("mousemove", e => {
+    const r = cv.getBoundingClientRect(), [wx, wy] = M.t.invert([e.clientX - r.left, e.clientY - r.top]);
+    const n = M.tree.find(wx, wy, 14 / M.t.k);
+    if (n !== M.hover) { M.hover = n || null; draw(); }
+    if (!n) { tip.hidden = true; return; }
+    const d = n.d, w = hl?.get(n.hash);
+    tip.innerHTML = `<b>${esc(d.title)}</b><span>${esc(d.folder.replace(/-/g, " ") || "Books")} · ${d.pages} pp${w ? ` · match ${Math.round(100 * w)}%` : ""}</span>`;
+    tip.hidden = false;
+    const x = e.clientX - r.left + 14, y = e.clientY - r.top + 14;
+    tip.style.left = Math.min(x, W - tip.offsetWidth - 8) + "px"; tip.style.top = Math.min(y, H - tip.offsetHeight - 8) + "px";
+  });
+  cv.addEventListener("mouseleave", () => { M.hover = null; tip.hidden = true; draw(); });
+  cv.addEventListener("click", e => {
+    const r = cv.getBoundingClientRect(), [wx, wy] = M.t.invert([e.clientX - r.left, e.clientY - r.top]);
+    const n = M.tree.find(wx, wy, 14 / M.t.k);
+    if (n) { const p = S.results?.hits?.find(h => h.hash === n.hash)?.page ?? S.results?.books?.find(b => b.hash === n.hash)?.hits[0]?.page; openDetail(n.hash, p); }
+  });
+
+  new ResizeObserver(resize).observe(wrap);
+  const r0 = wrap.getBoundingClientRect(); W = r0.width; H = r0.height;
+  // Fit the view: to the lit books when a search or shelf changes, else keep the user's zoom
+  const fitKey = (hl ? [...hl.keys()].join() : "") + "|" + S.folder;
+  if (!M.t) { M.t = d3.zoomIdentity; fitTo(M.nodes, false); }
+  else sel.call(zoom.transform, M.t);
+  if (fitKey !== M.fitKey) {
+    const target = M.nodes.filter(lit);
+    const top = hl ? target.sort((a, b) => hl.get(b.hash) - hl.get(a.hash)).slice(0, 25) : target;
+    if (M.fitKey !== null || hl || S.folder) fitTo(top.length ? top : M.nodes, true);
+    M.fitKey = fitKey;
+  }
+  resize();
+}
+
+/* ---------- search */
+function setMode(m) {
+  S.mode = m;
+  document.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === m));
+  $("#q").placeholder = { titles: "Filter titles…", semantic: "Describe an idea, press Enter…", books: "Which books deal with… press Enter", text: "Exact word or phrase, press Enter…" }[m];
+  if (m === "titles") { S.results = null; render(); } else if (S.q) runSearch();
+}
+document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
+$("#q").addEventListener("input", e => { S.q = e.target.value.trim(); if (S.mode === "titles") render(); else if (!S.q) { S.results = null; render(); } });
+$("#searchform").addEventListener("submit", e => { e.preventDefault(); if (S.mode !== "titles") runSearch(); });
+
+async function runSearch() {
+  if (!S.q) return;
+  if (S.folder === "!unindexed" || S.folder === "!missing") { S.folder = ""; renderTree(); }
+  const folder = S.folder === "!loose" ? "" : S.folder;
+  $("#center").innerHTML = `<div class="loading">${({ text: "Scanning every passage for those words…", books: "Weighing every book against that idea…" })[S.mode] ?? "Searching for related passages…"}</div>`;
+  try {
+    const r = await api(`/api/search?mode=${S.mode}&n=60&q=${encodeURIComponent(S.q)}&folder=${encodeURIComponent(folder)}`);
+    S.results = { hits: r.hits || [], books: r.books || [], q: S.q, mode: S.mode };
+  } catch (err) { S.results = { hits: [], books: [], q: S.q, mode: S.mode }; toast("Search failed: " + err.message); }
+  render();
+}
+
+/* ---------- detail */
+async function openDetail(hash, page) {
+  S.sel = hash; S.page = page || 1;
+  const d = S.byHash[hash]; if (!d) return;
+  $("#main").classList.add("with-detail");
+  const el = $("#detail"); el.hidden = false; el.scrollTop = 0;
+  document.querySelectorAll(".book.sel, tr.sel").forEach(x => x.classList.remove("sel"));
+  document.querySelectorAll(`[data-hash="${hash}"]`).forEach(x => x.matches(".book, tr") && x.classList.add("sel"));
+  const crumbs = d.folder ? d.folder.split("/").map(p => p.replace(/-/g, " ")).join(" › ") : "Books";
+  el.innerHTML = `<div class="card">
+    <button class="iconbtn close" id="closedetail">Close</button>
+    <div class="card-top">${coverHTML(d)}<div>
+      <h2>${esc(d.title)}</h2>
+      <dl class="facts">
+        <dt>Shelf</dt><dd>${esc(crumbs)}</dd>
+        <dt>File</dt><dd class="mono">${esc(d.file)}</dd>
+        <dt>Extent</dt><dd>${d.pages} pages · ${d.chunks.toLocaleString()} passages${d.exists ? " · " + fmtSize(d.size) : ""}</dd>
+        <dt>Hash</dt><dd class="mono">${d.hash}</dd>
+        ${d.exists ? "" : `<dt>Status</dt><dd><span class="chip warn">file missing on disk</span></dd>`}
+      </dl></div></div>
+    ${d.exists ? `<div class="actions">
+      <button class="btn" id="openviewer">Open in ${d.ext === "epub" ? "reader" : "viewer"}${d.ext === "pdf" ? ` at p. <span id="openpg">${S.page}</span>` : ""}</button>
+      ${d.ext === "pdf" ? `<a class="btn ghost" id="openweb" target="_blank" href="/file/${hash}#page=${S.page}">Open in browser tab</a>` : ""}
+      <button class="btn ghost" id="reveal">Show folder</button>
+      <button class="btn ghost" id="copypath">Copy path</button></div>` : ""}
+    <div><h4 class="section-h">Indexed text<span class="reader-nav">
+      <button id="pprev" aria-label="Previous page">‹</button>
+      <input id="pnum" type="number" min="1" value="${S.page}" aria-label="Page number">
+      <span class="count">/ ${d.pages}</span>
+      <button id="pnext" aria-label="Next page">›</button></span></h4>
+      <div class="page-text" id="ptext" style="margin-top:10px">…</div></div>
+    <div><h4 class="section-h">Nearby on other shelves</h4><div id="similar" class="loading">Comparing passages…</div></div>
+  </div>`;
+  loadPage();
+  try {
+    const r = await api(`/api/doc/${hash}/similar`);
+    if (S.sel !== hash) return;
+    const max = Math.max(...r.similar.map(s => s.score), 0.0001);
+    $("#similar").className = "";
+    $("#similar").innerHTML = r.similar.map(s => { const o = S.byHash[s.hash]; if (!o) return "";
+      return `<div class="sim" data-sim="${s.hash}">${coverHTML(o)}<div><div class="t">${esc(o.title)}</div><div class="f">${esc(o.folder.replace(/-/g, " ") || "Books")}</div></div>
+        <div class="bar" title="similarity ${s.score.toFixed(3)}"><i style="width:${Math.round(100 * s.score / max)}%"></i></div></div>`; }).join("")
+      || `<div class="empty">No neighbours found.</div>`;
+  } catch { $("#similar").textContent = "Could not compute neighbours."; }
+}
+async function loadPage() {
+  const hash = S.sel, page = S.page;
+  $("#pnum").value = page;
+  if ($("#openpg")) $("#openpg").textContent = page;
+  if ($("#openweb")) $("#openweb").href = `/file/${hash}#page=${page}`;
+  const r = await api(`/api/doc/${hash}/page/${page}`).catch(() => ({ chunks: [] }));
+  if (S.sel !== hash || S.page !== page) return;
+  // Chunks overlap by ~200 chars; drop the repeated head of each following chunk.
+  let text = "";
+  for (const ch of r.chunks) {
+    let k = Math.min(250, ch.length, text.length);
+    while (k > 20 && !text.endsWith(ch.slice(0, k))) k--;
+    text += (text && k > 20 ? ch.slice(k) : (text ? "\n" : "") + ch);
+  }
+  const hl = S.results?.mode === "text" ? S.results.q : null;
+  $("#ptext").innerHTML = text ? (hl ? esc(text).replace(new RegExp(esc(hl).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), m => `<mark>${m}</mark>`) : esc(text))
+    : `<span class="count">No indexed text on this page (blank, image-only, or not extracted).</span>`;
+}
+$("#detail").addEventListener("click", async e => {
+  const d = S.byHash[S.sel];
+  const id = e.target.closest("[id]")?.id;
+  if (id === "closedetail") { $("#detail").hidden = true; $("#main").classList.remove("with-detail"); S.sel = null; document.querySelectorAll(".sel").forEach(x => x.matches(".book, tr") && x.classList.remove("sel")); return; }
+  if (id === "pprev" && S.page > 1) { S.page--; return loadPage(); }
+  if (id === "pnext" && S.page < d.pages) { S.page++; return loadPage(); }
+  if (id === "openviewer" || id === "reveal") {
+    try { await api("/api/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hash: d.hash, page: S.page, reveal: id === "reveal" }) });
+      toast(id === "reveal" ? "Opened the folder" : `Opened ${d.file}`); } catch (err) { toast(err.message); }
+    return;
+  }
+  if (id === "copypath") { navigator.clipboard?.writeText(d.path).then(() => toast("Path copied"), () => toast(d.path)); return; }
+  const sim = e.target.closest("[data-sim]"); if (sim) openDetail(sim.dataset.sim);
+});
+$("#detail").addEventListener("change", e => { if (e.target.id === "pnum") { const d = S.byHash[S.sel]; S.page = Math.min(Math.max(1, +e.target.value || 1), d.pages || 1); loadPage(); } });
+document.addEventListener("keydown", e => {
+  if (e.target.matches("input, select") || $("#detail").hidden) return;
+  if (e.key === "ArrowRight") $("#pnext")?.click();
+  if (e.key === "ArrowLeft") $("#pprev")?.click();
+  if (e.key === "Escape") $("#closedetail")?.click();
+});
+
+/* ---------- chrome */
+$("#navtoggle").addEventListener("click", () => $("#nav").classList.toggle("open"));
+$("#refresh").addEventListener("click", async () => { toast("Rescanning…"); M.data = null; await loadCatalog(true); toast("Catalog up to date"); });
+$("#theme").addEventListener("click", () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark"; store.set("theme", document.documentElement.dataset.theme);
+  M.draw?.();
+});
+{ const t = store.get("theme", null); if (t) document.documentElement.dataset.theme = t; }
+
+loadCatalog().catch(err => { $("#center").innerHTML = `<div class="empty">Could not read the index: ${esc(err.message)}.<br>Is Qdrant running on localhost:6333?</div>`; });
+</script>
+</body>
+</html>

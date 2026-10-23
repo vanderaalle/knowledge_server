@@ -51,6 +51,7 @@ Everything runs locally. No data leaves your machine except your messages to Cla
 - `server.py`: The main MCP server entry point.
 - `scripts/`: Utility and maintenance scripts (`manage_index.py`, `organize_books.py`, etc.).
 - `scripts/dev_legacy/`: Old dev/debug scripts, kept for reference.
+- `library_browser.py`: Local web UI to browse and search the library (see below).
 - `install.ipynb`: Setup and dependency installation notebook.
 - `knowledge_server.ipynb`: Notebook for indexing and querying interactively.
 
@@ -431,6 +432,24 @@ The knowledge server is the index — filenames and Qdrant are the only metadata
 > **Using Calibre?** It works too — just point `index_library` at your Calibre Library folder. But be aware that renaming books in Calibre moves their files, which can make source paths in Qdrant go stale. `scripts/cleanup_orphans.py` cleans those up.
 
 ---
+
+## Library Browser
+
+A local web UI for exploring the library, independent of Claude:
+
+```bash
+./library_browser.sh          # starts the server if needed, opens an app window
+# or: .venv/bin/python library_browser.py [--port 8765] [--no-open]
+```
+
+- **Shelves**: folder tree under `BOOKS_DIR` with book counts, plus two housekeeping shelves: files on disk that are not indexed, and indexed books whose file has moved or been deleted.
+- **Covers / List**: sortable by title, date added, pages or size; the search box filters titles live.
+- **Concepts / Exact words**: the same semantic and literal search as `query_library` / `search_text`, limited to the selected shelf, with results grouped by book.
+- **Book topics**: ranks whole books for an idea. It retrieves the 600 closest passages and scores each book on its five best ones, weighted 1, 0.6, 0.4, 0.3, 0.2, so a book that keeps returning to the topic outranks a single passing mention.
+- **Map**: a zoomable map where each book is a dot placed by what its text is about (the mean of its passage vectors, linked to its 6 nearest books), coloured by top-level shelf. Searches and the title filter light up matching books and zoom to them; the legend filters by shelf. Regions are labelled at two zoom levels (about 12 broad areas, about 40 neighbourhoods), using title words that are frequent in a region but rare in the library and in other regions; broad areas take the leading terms of the neighbourhoods inside them. The first build reads every vector (about 1.5 minutes for 240k passages) and caches book vectors in `~/.cache/knowledge_server/book_vectors.npz`; after that only new or re-indexed books are recomputed.
+- **Book card**: indexed text page by page (arrow keys to turn pages), open in the system viewer or a browser tab at that page, and "nearby" books whose passages are closest to this one's.
+
+The catalog is read from Qdrant on the fly (one entry per `file_hash`) and rebuilt whenever the collection's point count changes, so new indexing shows up on reload. **Rescan** forces a rebuild. Cover thumbnails are cached in `~/.cache/knowledge_server/covers`. The server listens on 127.0.0.1 only.
 
 ## Configuration
 
