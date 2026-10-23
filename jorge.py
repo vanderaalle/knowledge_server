@@ -37,7 +37,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from vector_db import get_db, OLLAMA_MODEL, COLLECTION_NAME
+from vector_db import get_db, embed_query, OLLAMA_MODEL, COLLECTION_NAME
 
 try:
     import config as _config
@@ -323,7 +323,7 @@ def api_search(request: Request):
     elif mode == "books":
         return JSONResponse({"books": _rank_books(client, q, flt, n)})
     else:
-        vec = ollama.embeddings(model=OLLAMA_MODEL, prompt=q)["embedding"]
+        vec = embed_query(q)
         res = client.search(COLLECTION_NAME, query_vector=vec, query_filter=flt,
                             limit=n, with_payload=True)
         hits = [_hit(r.payload.get("metadata", {}), r.payload.get("text", ""), r.score) for r in res]
@@ -337,7 +337,7 @@ _BOOK_POOL = 600   # passages retrieved before grouping them by book
 
 
 def _rank_books(client, q: str, flt, n: int):
-    vec = ollama.embeddings(model=OLLAMA_MODEL, prompt=q)["embedding"]
+    vec = embed_query(q)
     res = client.search(COLLECTION_NAME, query_vector=vec, query_filter=flt,
                         limit=_BOOK_POOL, with_payload=True)
     by_book = {}

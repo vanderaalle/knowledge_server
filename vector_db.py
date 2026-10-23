@@ -16,6 +16,18 @@ QDRANT_HOST = os.getenv('QDRANT_HOST', 'localhost')
 QDRANT_PORT = int(os.getenv('QDRANT_PORT', '6333'))
 COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'pdf_library')
 
+# Some embedding models are trained with an instruction on the query side only;
+# passages are embedded as-is. Without it, short queries match poorly.
+QUERY_PREFIXES = {
+    'mxbai-embed-large': 'Represent this sentence for searching relevant passages: ',
+}
+
+
+def embed_query(query: str) -> List[float]:
+    """Embed a search query (not a passage) with the model's query instruction."""
+    prefix = QUERY_PREFIXES.get(OLLAMA_MODEL.split(':')[0], '')
+    return ollama.embeddings(model=OLLAMA_MODEL, prompt=prefix + query)["embedding"]
+
 
 class VectorDBClient:
     """Client Qdrant - Singleton-ish"""

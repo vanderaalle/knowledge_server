@@ -46,7 +46,7 @@ from pdf_processor import (
     _process_single_pdf, _worker_init, _calculate_file_hash,
     MAX_WORKERS
 )
-from vector_db import VectorDBClient, get_db, OLLAMA_MODEL, COLLECTION_NAME
+from vector_db import VectorDBClient, get_db, embed_query, OLLAMA_MODEL, COLLECTION_NAME
 
 
 # Anna's Archive configuration
@@ -453,8 +453,7 @@ def query_library(query: str, n_results: int = 5) -> str:
         return "❌ Query required"
     db = get_db()
     try:
-        response = ollama.embeddings(model=OLLAMA_MODEL, prompt=query)
-        results = db.search(response["embedding"], limit=n_results)
+        results = db.search(embed_query(query), limit=n_results)
         if not results:
             return "No results."
         formatted = []
