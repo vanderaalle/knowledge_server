@@ -21,6 +21,7 @@ import time
 import hashlib
 import concurrent.futures
 import functools
+import inspect
 import multiprocessing
 import threading
 import platform
@@ -34,7 +35,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 import ollama
 from qdrant_client.models import PointStruct
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from tqdm import tqdm
 import anyio.to_thread
 import requests
@@ -64,11 +65,57 @@ _INDEX_LOCK = threading.RLock()
 _SPAWN_CTX = multiprocessing.get_context("spawn")
 
 
+# Status of the indexing job running in the current thread, read by the
+# progress heartbeat. Unset when indexing runs outside an MCP tool (scripts).
+_job_status = threading.local()
+PROGRESS_HEARTBEAT_SECONDS = 30
+
+
+def _set_status(message: str):
+    status = getattr(_job_status, "current", None)
+    if status is not None:
+        status["message"] = message
+
+
 def _in_thread(fn):
-    """Run a blocking tool in a worker thread so the event loop stays responsive."""
+    """Run a blocking tool in a worker thread so the event loop stays responsive.
+
+    While it runs, a progress notification carrying the job's current status is
+    sent every PROGRESS_HEARTBEAT_SECONDS, so clients don't time out long jobs
+    (including ones queued behind another indexing job).
+    """
     @functools.wraps(fn)
-    async def wrapper(*args, **kwargs):
-        return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+    async def wrapper(*args, ctx: Context, **kwargs):
+        status = {"message": "Starting"}
+
+        def run():
+            _job_status.current = status
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _job_status.current = None
+
+        async def heartbeat():
+            start = time.monotonic()
+            while True:
+                await anyio.sleep(PROGRESS_HEARTBEAT_SECONDS)
+                # Progress must increase on every notification, so send elapsed
+                # seconds and put the human-readable status in the message.
+                elapsed = int(time.monotonic() - start)
+                await ctx.report_progress(elapsed, message=status["message"])
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(heartbeat)
+            try:
+                return await anyio.to_thread.run_sync(run)
+            finally:
+                tg.cancel_scope.cancel()
+
+    # Expose ctx to FastMCP (which injects it and hides it from the tool schema).
+    sig = inspect.signature(fn)
+    ctx_param = inspect.Parameter("ctx", inspect.Parameter.KEYWORD_ONLY, annotation=Context)
+    wrapper.__signature__ = sig.replace(parameters=[*sig.parameters.values(), ctx_param])
+    wrapper.__annotations__ = {**fn.__annotations__, "ctx": Context}
     return wrapper
 
 # Cache of file hashes known to have no extractable text — persisted to disk
@@ -146,7 +193,9 @@ def _get_annas_response(endpoint: str, params: dict = None, stream: bool = False
 
 def _index_directory(*args, **kwargs) -> tuple:
     """Serialized entry point for indexing; see _index_directory_unlocked."""
+    _set_status("Waiting for another indexing job to finish")
     with _INDEX_LOCK:
+        _set_status("Parsing PDFs")
         return _index_directory_unlocked(*args, **kwargs)
 
 
@@ -189,6 +238,8 @@ def _index_directory_unlocked(directory_path: str = None, use_ocr: bool = False,
 
         for future in tqdm(concurrent.futures.as_completed(futures), total=total_pdfs, desc="Parsing PDFs", unit="file"):
             file_path = futures[future]
+            files_done = sum(stats.values())
+            _set_status(f"Parsed {files_done + 1}/{total_pdfs} files; current: {file_path.name}")
             try:
                 res = future.result()
 
@@ -246,6 +297,8 @@ def _index_directory_unlocked(directory_path: str = None, use_ocr: bool = False,
                             db.upsert_points(points)
                             book_vectors += len(points)
                             points = []
+                            _set_status(f"Embedding {file_path.name}: {book_vectors}/{len(chunks)} chunks "
+                                        f"(file {files_done + 1}/{total_pdfs})")
 
                     except Exception as e:
                         print(f"  ⚠️  Chunk error in {file_path.name}: {e}", file=sys.stderr)
