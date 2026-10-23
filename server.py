@@ -38,8 +38,6 @@ from qdrant_client.models import PointStruct
 from mcp.server.fastmcp import FastMCP, Context
 from tqdm import tqdm
 import anyio.to_thread
-import requests
-from bs4 import BeautifulSoup
 
 from pdf_processor import (
     TextChunk, PDFProcessor,
@@ -48,10 +46,6 @@ from pdf_processor import (
 )
 from vector_db import VectorDBClient, get_db, embed_query, OLLAMA_MODEL, COLLECTION_NAME
 
-
-# Anna's Archive configuration
-USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-ANNAS_URLS = ["https://annas-archive.gl", "https://annas-archive.se", "https://annas-archive.org", "https://annas-archive.li"]
 
 mcp = FastMCP("knowledge-server-optimized")
 
@@ -174,21 +168,6 @@ def _add_force_ocr_hash(file_hash: str):
     hashes.add(file_hash)
     with open(_FORCE_OCR_PATH, "w") as f:
         json.dump(sorted(hashes), f, indent=1)
-
-
-def _get_annas_response(endpoint: str, params: dict = None, stream: bool = False):
-    """Try each Anna's Archive mirror in order."""
-    last_error = None
-    for base_url in ANNAS_URLS:
-        url = f"{base_url}{endpoint}"
-        try:
-            resp = requests.get(url, params=params, headers={'User-Agent': USER_AGENT}, timeout=10, stream=stream)
-            resp.raise_for_status()
-            return resp, base_url
-        except Exception as e:
-            last_error = e
-            continue
-    raise last_error
 
 
 def _index_directory(*args, **kwargs) -> tuple:
@@ -563,171 +542,6 @@ def open_pdf_page(file_path: str, page_number: int = 1, search_term: str = "") -
         return f"✅ Opened {os.path.basename(file_path)} at page {page_number}"
     except Exception as e:
         return f"❌ Could not open file: {e}"
-
-
-@mcp.tool()
-def search_annas_archive(query: str, limit: int = 5, lang: str = '', ext: str = '') -> str:
-    """
-    Search for books on Anna's Archive.
-    Supports automatic semantic search if the query looks like natural language.
-    Returns a list of results with MD5 for download.
-    """
-    search_query = query
-    if len(query.split()) > 3:
-        try:
-            prompt = f"Convert this natural language request into specific keywords for a book search. Output ONLY keywords. Request: '{query}'"
-            response = ollama.generate(model="deepseek-r1:7b", prompt=prompt, stream=False)
-            if 'response' in response:
-                keywords = response['response'].strip().replace('"', '')
-                if "</think>" in keywords:
-                    keywords = keywords.split("</think>")[-1].strip()
-                search_query = keywords
-        except Exception:
-            pass
-
-    params = {'q': search_query}
-    if lang:
-        params['lang'] = lang
-    if ext:
-        params['ext'] = ext
-
-    try:
-        response = None
-        current_url = None
-        last_error = None
-        for base_url in ANNAS_URLS:
-            url = f"{base_url}/search"
-            try:
-                resp = requests.get(url, params=params, headers={'User-Agent': USER_AGENT}, timeout=10)
-                resp.raise_for_status()
-                response = resp
-                current_url = base_url
-                break
-            except Exception as e:
-                last_error = e
-                continue
-
-        if not response:
-            raise last_error
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-        results = []
-        seen_md5s = set()
-
-        for a_tag in soup.find_all('a', href=True):
-            href = a_tag['href']
-            if '/md5/' in href:
-                md5 = href.split('/md5/')[1]
-                title = a_tag.get_text(separator=" ", strip=True)
-                if not title or len(title) < 3:
-                    continue
-                if md5 not in seen_md5s:
-                    seen_md5s.add(md5)
-                    container = a_tag.parent
-                    full_text = container.get_text(separator=" | ", strip=True)
-                    results.append(f"{len(results)+1}. {title}\n   MD5: {md5}\n   Info: {full_text[:150]}...")
-                if len(results) >= limit:
-                    break
-
-        if not results:
-            return f"❌ No results found for '{search_query}'."
-
-        return f"V2.1 - {len(results)} results\n\n" + "\n\n".join(results) + "\n\n💡 Use 'download_from_annas_archive(md5)' to download."
-
-    except Exception as e:
-        return f"❌ Search error: {e}"
-
-
-@mcp.tool()
-def download_from_annas_archive(md5: str) -> str:
-    """
-    Download a book from Anna's Archive given its MD5.
-    Saves the file in 'alias_books/'.
-    Attempts automatic download from IPFS/Libgen, otherwise returns manual links.
-    """
-    try:
-        response = None
-        current_url = None
-        last_error = None
-        for base_url in ANNAS_URLS:
-            url = f"{base_url}/md5/{md5}"
-            try:
-                resp = requests.get(url, headers={'User-Agent': USER_AGENT}, timeout=10)
-                resp.raise_for_status()
-                response = resp
-                current_url = base_url
-                break
-            except Exception as e:
-                last_error = e
-                continue
-
-        if not response:
-            raise last_error
-
-        output_dir = "alias_books/"
-        os.makedirs(output_dir, exist_ok=True)
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        title = ""
-        author = ""
-        title_tag = soup.find('div', class_='text-3xl font-bold')
-        if title_tag:
-            title = title_tag.get_text(strip=True)
-        author_div = soup.find('div', class_='italic')
-        if author_div:
-            author_tag = author_div.find('a')
-            if author_tag:
-                author = author_tag.get_text(strip=True)
-            else:
-                author = author_div.get_text(strip=True)
-
-        if not title:
-            title = f"Book_{md5}"
-
-        full_name = f"{author} - {title}" if author else title
-        safe_name = re.sub(r'[\\/*?:"<>|]', "", full_name).strip().rstrip('.')
-
-        ipfs_links = []
-        libgen_links = []
-        slow_links = []
-
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if href.startswith('ipfs://'):
-                cid = href.replace('ipfs://', '')
-                ipfs_links.append(f"https://ipfs.io/ipfs/{cid}")
-                ipfs_links.append(f"https://dweb.link/ipfs/{cid}")
-            elif 'libgen.li' in href:
-                libgen_links.append(href)
-            elif '/slow_download/' in href:
-                slow_links.append(f"{current_url}{href}")
-
-        for link in ipfs_links + libgen_links:
-            try:
-                with requests.get(link, stream=True, timeout=20) as r:
-                    r.raise_for_status()
-                    content_type = r.headers.get('Content-Type', '').lower()
-                    if 'application/pdf' in content_type:
-                        filepath = os.path.join(output_dir, f"{safe_name}.pdf")
-                        with open(filepath, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=8192):
-                                f.write(chunk)
-                        return f"✅ Download completed: {filepath}"
-            except Exception:
-                continue
-
-        msg = f"❌ Automatic download failed. No direct PDF links found for '{full_name}'.\n\nHere are the links for manual checking:\n"
-        for link in slow_links[:3]:
-            msg += f"🔗 Slow Server: {link}\n"
-        for link in libgen_links[:1]:
-            msg += f"🔗 Libgen: {link}\n"
-        return msg
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        return f"❌ Error retrieving details: {e}"
 
 
 if __name__ == "__main__":
