@@ -1,0 +1,10 @@
+[Unit]
+Description=Start the knowledge server re-index every night at 20:00
+
+[Timer]
+OnCalendar=*-*-* 20:00:00
+# If the laptop was asleep at 20:00, run on wake; the script exits outside 20:00-08:00.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

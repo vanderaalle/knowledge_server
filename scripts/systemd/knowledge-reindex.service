@@ -1,0 +1,19 @@
+[Unit]
+Description=Knowledge server: nightly re-index of the library into pdf_library_v2
+# Never on battery; the timer retries the next night.
+ConditionACPower=true
+
+[Service]
+Type=oneshot
+# A run lasts up to the whole window.
+TimeoutStartSec=infinity
+WorkingDirectory=%h/knowledge_server/knowledge_server
+Environment=OLLAMA_MODEL=mxbai-embed-large QDRANT_HOST=localhost QDRANT_PORT=6333
+# Hold off suspend (including lid close) while the run is active.
+ExecStart=/usr/bin/systemd-inhibit --what=sleep:handle-lid-switch --who=knowledge-reindex \
+    --why="Nightly library re-index" --mode=block \
+    %h/knowledge_server/knowledge_server/.venv/bin/python scripts/reindex_nightly.py \
+    --collection pdf_library_v2 --from 20:00 --until 08:00
+StandardOutput=append:%h/.local/share/knowledge_server/reindex_pdf_library_v2.log
+StandardError=append:%h/.local/share/knowledge_server/reindex_pdf_library_v2.err
+Nice=10
